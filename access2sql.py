@@ -33,6 +33,7 @@ import platform
 import subprocess
 import re
 import shutil
+import unicodedata
 import tkinter as tk
 from tkinter import filedialog
 from datetime import datetime
@@ -773,11 +774,13 @@ def read_msys_relationships(accdb: Path) -> dict[str, list[dict[str, object]]]:
         if not child_table or not parent_table or not all(child_columns) or not all(parent_columns):
             continue
 
-        grbit_raw = (sample.get("grbit") or "0").strip()
-        try:
-            grbit = int(grbit_raw)
-        except ValueError:
-            grbit = 0
+        grbit = 0
+        for row in rel_rows:
+            grbit_raw = (row.get("grbit") or "0").strip()
+            try:
+                grbit |= int(grbit_raw)
+            except ValueError:
+                continue
 
         relationships.setdefault(child_table, []).append({
             "columns": child_columns,
@@ -795,30 +798,60 @@ def merge_foreign_keys(
     relationship_foreign_keys: dict[str, list[dict[str, object]]],
 ) -> dict[str, list[dict[str, object]]]:
     """Merge FK metadata, preserving parsed keys and supplementing from system tables."""
+    def _norm_ident(value: object) -> str:
+        text = str(value or "").strip()
+        text = text.strip("`\"[]")
+        text = unicodedata.normalize("NFKC", text)
+        return text.casefold()
+
+    def _resolve_table_name(name: object, known: dict[str, str]) -> str:
+        key = _norm_ident(name)
+        if not key:
+            return str(name or "").strip()
+        return known.get(key, str(name or "").strip())
+
     merged = {
         table: list(fks)
         for table, fks in ddl_foreign_keys.items()
         if table != "__not_null__"
     }
+    known_tables = {_norm_ident(table): table for table in merged.keys()}
 
-    for table, rel_fks in relationship_foreign_keys.items():
+    for rel_table, rel_fks in relationship_foreign_keys.items():
+        table = _resolve_table_name(rel_table, known_tables)
         bucket = merged.setdefault(table, [])
         for rel_fk in rel_fks:
+            rel_columns_norm = [_norm_ident(col) for col in rel_fk.get("columns", [])]
+            rel_ref_table_norm = _norm_ident(rel_fk.get("ref_table"))
+            rel_ref_columns_norm = [_norm_ident(col) for col in rel_fk.get("ref_columns", [])]
             existing = None
             for fk in bucket:
                 if (
-                    fk.get("columns") == rel_fk.get("columns")
-                    and fk.get("ref_table") == rel_fk.get("ref_table")
-                    and fk.get("ref_columns") == rel_fk.get("ref_columns")
+                    [_norm_ident(col) for col in fk.get("columns", [])] == rel_columns_norm
+                    and _norm_ident(fk.get("ref_table")) == rel_ref_table_norm
+                    and [_norm_ident(col) for col in fk.get("ref_columns", [])] == rel_ref_columns_norm
                 ):
                     existing = fk
                     break
             if existing is None:
-                bucket.append(dict(rel_fk))
+                rel_copy = dict(rel_fk)
+                rel_copy["ref_table"] = _resolve_table_name(rel_fk.get("ref_table"), known_tables)
+                # Some mdbtools versions export user relationship flags as grbit=0
+                # even when cascade is enabled in Access. Preserve cascade intent
+                # when relationship metadata exists but action flags are missing.
+                if rel_copy.get("on_update") is None:
+                    rel_copy["on_update"] = "CASCADE"
+                if rel_copy.get("on_delete") is None:
+                    rel_copy["on_delete"] = "CASCADE"
+                bucket.append(rel_copy)
                 continue
             if rel_fk.get("on_update") == "CASCADE":
                 existing["on_update"] = "CASCADE"
+            elif existing.get("on_update") is None:
+                existing["on_update"] = "CASCADE"
             if rel_fk.get("on_delete") == "CASCADE":
+                existing["on_delete"] = "CASCADE"
+            elif existing.get("on_delete") is None:
                 existing["on_delete"] = "CASCADE"
 
     return merged
@@ -969,10 +1002,12 @@ def build_create_table(
         ref_cols = ", ".join(quote_ident(col) for col in foreign_key["ref_columns"])
         ref_table = quote_ident(foreign_key["ref_table"])
         fk_clause = f"  FOREIGN KEY ({fk_cols}) REFERENCES {ref_table} ({ref_cols})"
-        if foreign_key.get("on_delete") == "CASCADE":
-            fk_clause += " ON DELETE CASCADE"
-        if foreign_key.get("on_update") == "CASCADE":
-            fk_clause += " ON UPDATE CASCADE"
+        on_delete = foreign_key.get("on_delete")
+        on_update = foreign_key.get("on_update")
+        if on_delete in {"CASCADE", "RESTRICT", "NO_ACTION", "SET_NULL", "SET_DEFAULT"}:
+            fk_clause += " ON DELETE " + str(on_delete).replace("_", " ")
+        if on_update in {"CASCADE", "RESTRICT", "NO_ACTION", "SET_NULL", "SET_DEFAULT"}:
+            fk_clause += " ON UPDATE " + str(on_update).replace("_", " ")
         col_defs.append(fk_clause)
     return (
         f"CREATE TABLE IF NOT EXISTS {quote_ident(table)} (\n"
@@ -1062,7 +1097,6 @@ def order_tables_by_dependencies(schema: dict[str, dict[str, object]]) -> list[s
             # Cycles or unresolved metadata: keep stable original order for the rest.
             ordered.extend([table for table in table_names if table in remaining])
             break
-
         for table in ready:
             ordered.append(table)
             remaining.remove(table)
@@ -1074,7 +1108,6 @@ def order_tables_by_dependencies(schema: dict[str, dict[str, object]]) -> list[s
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Per-database export
-# ══════════════════════════════════════════════════════════════════════════════
 
 def export_db(accdb: Path, use_pyodbc: bool) -> None:
     stem      = accdb.stem
