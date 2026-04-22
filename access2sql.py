@@ -267,6 +267,7 @@ def try_pyodbc(accdb: Path):
                 "sqlite_type": access_type_to_sqlite(atype),
                 "not_null": not nullable_by_name.get(name, True),
                 "datetime_mode": "auto" if "DATETIME" in access_type_to_sqlite(atype).upper() else None,
+                "datetime_include_seconds": None if "DATETIME" in access_type_to_sqlite(atype).upper() else None,
             })
 
         try:
@@ -469,7 +470,8 @@ def try_mdbtools(accdb: Path):
                 "access_type": atype,
                 "sqlite_type": sqlite_type,
                 "not_null":    not_null_map.get(cname, False) or cname in primary_key_set,
-                "datetime_mode": datetime_mode_map.get(cname, "auto") if "DATETIME" in sqlite_type.upper() else None,
+                "datetime_mode": datetime_mode_map.get(cname, {}).get("mode", "auto") if "DATETIME" in sqlite_type.upper() else None,
+                "datetime_include_seconds": datetime_mode_map.get(cname, {}).get("include_seconds") if "DATETIME" in sqlite_type.upper() else None,
             })
         schema[table] = {
             "columns": cols_info,
@@ -500,35 +502,51 @@ def _normalize_access_format(fmt: str) -> str:
     return re.sub(r"\s+", " ", (fmt or "").strip().lower())
 
 
-def datetime_mode_from_access_format(fmt: str | None) -> str | None:
-    """Map Access Format text to one of: date, time, datetime, or None."""
+def datetime_settings_from_access_format(fmt: str | None) -> dict[str, object]:
+    """Map Access Format text to datetime mode and time precision."""
+    settings: dict[str, object] = {"mode": None, "include_seconds": None}
     if not fmt:
-        return None
+        return settings
     f = _normalize_access_format(fmt)
     if not f:
-        return None
+        return settings
 
     # Common Access named formats
     if "short date" in f or "medium date" in f or "long date" in f:
-        return "date"
-    if "short time" in f or "medium time" in f or "long time" in f:
-        return "time"
+        settings["mode"] = "date"
+        return settings
+    if "short time" in f:
+        settings["mode"] = "time"
+        settings["include_seconds"] = False
+        return settings
+    if "medium time" in f:
+        settings["mode"] = "time"
+        settings["include_seconds"] = False
+        return settings
+    if "long time" in f:
+        settings["mode"] = "time"
+        settings["include_seconds"] = True
+        return settings
     if "general date" in f:
-        return "datetime"
+        settings["mode"] = "datetime"
+        return settings
 
     has_date_token = bool(re.search(r"\b(d|dd|ddd|dddd|m|mm|mmm|mmmm|yy|yyyy)\b", f))
     has_time_token = bool(re.search(r"\b(h|hh|n|nn|s|ss|am/pm|a/p)\b", f))
+    has_second_token = bool(re.search(r"\b(s|ss)\b", f))
     if has_date_token and not has_time_token:
-        return "date"
-    if has_time_token and not has_date_token:
-        return "time"
-    if has_date_token and has_time_token:
-        return "datetime"
-    return None
+        settings["mode"] = "date"
+    elif has_time_token and not has_date_token:
+        settings["mode"] = "time"
+        settings["include_seconds"] = has_second_token
+    elif has_date_token and has_time_token:
+        settings["mode"] = "datetime"
+        settings["include_seconds"] = has_second_token
+    return settings
 
 
-def read_datetime_modes_from_mdb_prop(accdb: Path, table: str) -> dict[str, str]:
-    """Read Access field format settings and return datetime mode per column."""
+def read_datetime_modes_from_mdb_prop(accdb: Path, table: str) -> dict[str, dict[str, object]]:
+    """Read Access field format settings and return datetime settings per column."""
     try:
         text = _run(["mdb-prop", str(accdb), table], check=False)
     except Exception:
@@ -536,7 +554,7 @@ def read_datetime_modes_from_mdb_prop(accdb: Path, table: str) -> dict[str, str]
     if not text.strip():
         return {}
 
-    mode_map: dict[str, str] = {}
+    mode_map: dict[str, dict[str, object]] = {}
     current_col: str | None = None
     current_props: dict[str, str] = {}
 
@@ -545,9 +563,9 @@ def read_datetime_modes_from_mdb_prop(accdb: Path, table: str) -> dict[str, str]
         if not current_col or current_col == "(none)":
             return
         fmt = current_props.get("Format")
-        mode = datetime_mode_from_access_format(fmt)
-        if mode:
-            mode_map[current_col] = mode
+        settings = datetime_settings_from_access_format(fmt)
+        if settings.get("mode"):
+            mode_map[current_col] = settings
 
     for line in text.splitlines():
         m_name = re.match(r"^name:\s*(.+)\s*$", line)
@@ -671,7 +689,7 @@ def _parse_datetime_like(value: Any) -> datetime | None:
 
 
 def infer_datetime_modes(schema: dict[str, dict[str, object]], data: dict[str, list[list]]) -> None:
-    """Infer date/time mode from values when Access format metadata is absent."""
+    """Infer date/time mode and time precision when metadata is absent."""
     baseline_dates = {
         datetime(1899, 12, 30).date(),
         datetime(1899, 12, 31).date(),
@@ -683,7 +701,11 @@ def infer_datetime_modes(schema: dict[str, dict[str, object]], data: dict[str, l
         for idx, col in enumerate(cols):
             if "DATETIME" not in str(col.get("sqlite_type", "")).upper():
                 continue
-            if col.get("datetime_mode") not in (None, "", "auto"):
+            mode = col.get("datetime_mode")
+            include_seconds = col.get("datetime_include_seconds")
+            need_mode = mode in (None, "", "auto")
+            need_seconds = include_seconds is None
+            if not need_mode and not need_seconds:
                 continue
 
             parsed_values: list[datetime] = []
@@ -694,18 +716,25 @@ def infer_datetime_modes(schema: dict[str, dict[str, object]], data: dict[str, l
                 if dt is not None:
                     parsed_values.append(dt)
             if not parsed_values:
-                col["datetime_mode"] = "datetime"
+                if need_mode:
+                    col["datetime_mode"] = "datetime"
+                if need_seconds:
+                    col["datetime_include_seconds"] = True
                 continue
 
-            if all(dt.time().strftime("%H:%M:%S") == "00:00:00" for dt in parsed_values):
-                col["datetime_mode"] = "date"
-            elif all(dt.date() in baseline_dates for dt in parsed_values):
-                col["datetime_mode"] = "time"
-            else:
-                col["datetime_mode"] = "datetime"
+            if need_mode:
+                if all(dt.time().strftime("%H:%M:%S") == "00:00:00" for dt in parsed_values):
+                    col["datetime_mode"] = "date"
+                elif all(dt.date() in baseline_dates for dt in parsed_values):
+                    col["datetime_mode"] = "time"
+                else:
+                    col["datetime_mode"] = "datetime"
+
+            if need_seconds:
+                col["datetime_include_seconds"] = any(dt.second != 0 for dt in parsed_values)
 
 
-def format_datetime_value(value: Any, mode: str) -> str:
+def format_datetime_value(value: Any, mode: str, include_seconds: bool | None = None) -> str:
     dt = _parse_datetime_like(value)
     if dt is None:
         escaped = str(value).replace("'", "''")
@@ -713,8 +742,8 @@ def format_datetime_value(value: Any, mode: str) -> str:
     if mode == "date":
         return f"'{dt.strftime('%Y-%m-%d')}'"
     if mode == "time":
-        return f"'{dt.strftime('%H:%M:%S')}'"
-    return f"'{dt.strftime('%Y-%m-%d %H:%M:%S')}'"
+        return f"'{dt.strftime('%H:%M:%S' if include_seconds else '%H:%M')}'"
+    return f"'{dt.strftime('%Y-%m-%d %H:%M:%S' if include_seconds else '%Y-%m-%d %H:%M')}'"
 
 
 def _parse_csv_line(line: str) -> list[str]:
@@ -836,7 +865,13 @@ def build_insert(table: str, cols: list[dict], rows: list[list]) -> list[str]:
         for i, col in enumerate(cols):
             val = row[i] if i < len(row) else None
             if "DATETIME" in str(col.get("sqlite_type", "")).upper():
-                values.append(format_datetime_value(val, str(col.get("datetime_mode") or "datetime")))
+                values.append(
+                    format_datetime_value(
+                        val,
+                        str(col.get("datetime_mode") or "datetime"),
+                        col.get("datetime_include_seconds"),
+                    )
+                )
             else:
                 values.append(format_value(val, col["sqlite_type"]))
         stmts.append(
