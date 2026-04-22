@@ -11,7 +11,7 @@ Type mapping from Access → SQLite:
   Date/Time                → DATETIME
   Yes/No (Boolean)         → BOOLEAN (0/1)
   AutoNumber / Long Integer → INTEGER
-  Integer                  → INTEGER
+  Integer / Number        → INTEGER
   Single / Double / Currency / Decimal → REAL
   OLE Object / Binary      → BLOB
   everything else          → TEXT COLLATE NOCASE
@@ -126,9 +126,15 @@ _TYPE_MAP = {
     "autonumber": "INTEGER",
     "long integer":"INTEGER",
     "integer":    "INTEGER",
+    "int":        "INTEGER",
+    "smallint":   "INTEGER",
+    "bigint":     "INTEGER",
+    "tinyint":    "INTEGER",
     "byte":       "INTEGER",
+    "number":     "INTEGER",
     "single":     "REAL",
     "double":     "REAL",
+    "float":      "REAL",
     "currency":   "REAL",
     "decimal":    "REAL",
     "numeric":    "REAL",
