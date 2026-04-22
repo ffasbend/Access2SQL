@@ -35,6 +35,7 @@ import tkinter as tk
 from tkinter import filedialog
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -146,6 +147,8 @@ _TYPE_MAP = {
 
 def access_type_to_sqlite(access_type: str) -> str:
     key = access_type.lower().strip()
+    key = key.split("(", 1)[0].strip()
+    key = re.sub(r"\s+(not\s+null|null)$", "", key).strip()
     return _TYPE_MAP.get(key, "TEXT COLLATE NOCASE")
 
 
@@ -182,6 +185,14 @@ def format_value(value, sqlite_type: str) -> str:
         return "NULL"
 
     # TEXT / DATETIME
+    if "DATETIME" in st:
+        mode = "datetime"
+        if isinstance(value, dict):
+            # Defensive fallback for accidental dict payloads
+            escaped = str(value).replace("'", "''")
+            return f"'{escaped}'"
+        return format_datetime_value(value, mode)
+
     if isinstance(value, datetime):
         return f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'"
     if hasattr(value, "isoformat"):          # date / time objects
@@ -255,6 +266,7 @@ def try_pyodbc(accdb: Path):
                 "access_type": atype,
                 "sqlite_type": access_type_to_sqlite(atype),
                 "not_null": not nullable_by_name.get(name, True),
+                "datetime_mode": "auto" if "DATETIME" in access_type_to_sqlite(atype).upper() else None,
             })
 
         try:
@@ -301,6 +313,8 @@ def try_pyodbc(accdb: Path):
 
         cursor.execute(f"SELECT * FROM [{table}]")
         data[table] = [list(row) for row in cursor.fetchall()]
+
+    infer_datetime_modes(schema, data)
 
     conn.close()
     return schema, data
@@ -421,6 +435,8 @@ def try_mdbtools(accdb: Path):
         })
 
     for table in tables:
+        datetime_mode_map = read_datetime_modes_from_mdb_prop(accdb, table)
+
         # Export data as CSV
         csv_out = _run(["mdb-export", "-H", db, table], check=False)
         # With -H (no header), first run without -H to get header
@@ -436,11 +452,13 @@ def try_mdbtools(accdb: Path):
         cols_info = []
         for cname in col_names:
             atype = type_map.get(cname, "text")
+            sqlite_type = access_type_to_sqlite(atype)
             cols_info.append({
                 "name":        cname,
                 "access_type": atype,
-                "sqlite_type": access_type_to_sqlite(atype),
+                "sqlite_type": sqlite_type,
                 "not_null":    not_null_map.get(cname, False) or cname in primary_key_set,
+                "datetime_mode": datetime_mode_map.get(cname, "auto") if "DATETIME" in sqlite_type.upper() else None,
             })
         schema[table] = {
             "columns": cols_info,
@@ -462,7 +480,148 @@ def try_mdbtools(accdb: Path):
             rows.append(typed_vals)
         data[table] = rows
 
+    infer_datetime_modes(schema, data)
+
     return schema, data
+
+
+def _normalize_access_format(fmt: str) -> str:
+    return re.sub(r"\s+", " ", (fmt or "").strip().lower())
+
+
+def datetime_mode_from_access_format(fmt: str | None) -> str | None:
+    """Map Access Format text to one of: date, time, datetime, or None."""
+    if not fmt:
+        return None
+    f = _normalize_access_format(fmt)
+    if not f:
+        return None
+
+    # Common Access named formats
+    if "short date" in f or "medium date" in f or "long date" in f:
+        return "date"
+    if "short time" in f or "medium time" in f or "long time" in f:
+        return "time"
+    if "general date" in f:
+        return "datetime"
+
+    has_date_token = bool(re.search(r"\b(d|dd|ddd|dddd|m|mm|mmm|mmmm|yy|yyyy)\b", f))
+    has_time_token = bool(re.search(r"\b(h|hh|n|nn|s|ss|am/pm|a/p)\b", f))
+    if has_date_token and not has_time_token:
+        return "date"
+    if has_time_token and not has_date_token:
+        return "time"
+    if has_date_token and has_time_token:
+        return "datetime"
+    return None
+
+
+def read_datetime_modes_from_mdb_prop(accdb: Path, table: str) -> dict[str, str]:
+    """Read Access field format settings and return datetime mode per column."""
+    try:
+        text = _run(["mdb-prop", str(accdb), table], check=False)
+    except Exception:
+        return {}
+    if not text.strip():
+        return {}
+
+    mode_map: dict[str, str] = {}
+    current_col: str | None = None
+    current_props: dict[str, str] = {}
+
+    def flush() -> None:
+        nonlocal current_col, current_props
+        if not current_col or current_col == "(none)":
+            return
+        fmt = current_props.get("Format")
+        mode = datetime_mode_from_access_format(fmt)
+        if mode:
+            mode_map[current_col] = mode
+
+    for line in text.splitlines():
+        m_name = re.match(r"^name:\s*(.+)\s*$", line)
+        if m_name:
+            flush()
+            current_col = m_name.group(1).strip()
+            current_props = {}
+            continue
+        m_prop = re.match(r"^\s+([^:]+):\s*(.*)$", line)
+        if m_prop and current_col is not None:
+            key = m_prop.group(1).strip()
+            value = m_prop.group(2).strip()
+            current_props[key] = value
+    flush()
+    return mode_map
+
+
+def _parse_datetime_like(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    patterns = [
+        "%m/%d/%y %H:%M:%S",
+        "%m/%d/%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%H:%M:%S",
+    ]
+    for pat in patterns:
+        try:
+            return datetime.strptime(s, pat)
+        except ValueError:
+            continue
+    return None
+
+
+def infer_datetime_modes(schema: dict[str, dict[str, object]], data: dict[str, list[list]]) -> None:
+    """Infer date/time mode from values when Access format metadata is absent."""
+    baseline_dates = {
+        datetime(1899, 12, 30).date(),
+        datetime(1899, 12, 31).date(),
+        datetime(1900, 1, 1).date(),
+    }
+    for table, table_schema in schema.items():
+        cols = table_schema.get("columns", [])
+        rows = data.get(table, [])
+        for idx, col in enumerate(cols):
+            if "DATETIME" not in str(col.get("sqlite_type", "")).upper():
+                continue
+            if col.get("datetime_mode") not in (None, "", "auto"):
+                continue
+
+            parsed_values: list[datetime] = []
+            for row in rows:
+                if idx >= len(row):
+                    continue
+                dt = _parse_datetime_like(row[idx])
+                if dt is not None:
+                    parsed_values.append(dt)
+            if not parsed_values:
+                col["datetime_mode"] = "datetime"
+                continue
+
+            if all(dt.time().strftime("%H:%M:%S") == "00:00:00" for dt in parsed_values):
+                col["datetime_mode"] = "date"
+            elif all(dt.date() in baseline_dates for dt in parsed_values):
+                col["datetime_mode"] = "time"
+            else:
+                col["datetime_mode"] = "datetime"
+
+
+def format_datetime_value(value: Any, mode: str) -> str:
+    dt = _parse_datetime_like(value)
+    if dt is None:
+        escaped = str(value).replace("'", "''")
+        return f"'{escaped}'"
+    if mode == "date":
+        return f"'{dt.strftime('%Y-%m-%d')}'"
+    if mode == "time":
+        return f"'{dt.strftime('%H:%M:%S')}'"
+    return f"'{dt.strftime('%Y-%m-%d %H:%M:%S')}'"
 
 
 def _parse_csv_line(line: str) -> list[str]:
@@ -546,7 +705,10 @@ def build_insert(table: str, cols: list[dict], rows: list[list]) -> list[str]:
         values = []
         for i, col in enumerate(cols):
             val = row[i] if i < len(row) else None
-            values.append(format_value(val, col["sqlite_type"]))
+            if "DATETIME" in str(col.get("sqlite_type", "")).upper():
+                values.append(format_datetime_value(val, str(col.get("datetime_mode") or "datetime")))
+            else:
+                values.append(format_value(val, col["sqlite_type"]))
         stmts.append(
             f"INSERT INTO {quote_ident(table)} ({col_names}) VALUES ({', '.join(values)});"
         )
