@@ -5,7 +5,6 @@ access2sql.py
 Use a system folder-picker dialog to choose a root folder, then recursively
 find every .accdb / .mdb file, extract all tables + data, and produce:
   - <db_name>.sql   : CREATE TABLE + INSERT statements (SQLite-compatible)
-  - <db_name>.sqlite: ready-to-use SQLite database
 
 Type mapping from Access → SQLite:
   Text / Memo / Hyperlink  → TEXT COLLATE NOCASE
@@ -31,7 +30,6 @@ import os
 import sys
 import platform
 import subprocess
-import sqlite3
 import re
 import tkinter as tk
 from tkinter import filedialog
@@ -45,21 +43,45 @@ from pathlib import Path
 
 IS_WINDOWS = platform.system() == "Windows"
 IS_MAC     = platform.system() == "Darwin"
+LAST_FOLDER_FILE = Path.home() / ".access2sql.conf"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Folder chooser (native dialog)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _load_last_folder() -> str | None:
+    try:
+        p = LAST_FOLDER_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if p and Path(p).is_dir():
+        return p
+    return None
+
+
+def _save_last_folder(folder: str) -> None:
+    try:
+        LAST_FOLDER_FILE.write_text(folder, encoding="utf-8")
+    except OSError:
+        # Non-fatal: extraction should continue even if preference cannot be saved.
+        pass
+
+
 def pick_folder() -> Path:
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
-    folder = filedialog.askdirectory(title="Select root folder containing Access databases")
+    last_folder = _load_last_folder()
+    kwargs = {"title": "Select root folder containing Access databases"}
+    if last_folder:
+        kwargs["initialdir"] = last_folder
+    folder = filedialog.askdirectory(**kwargs)
     root.destroy()
     if not folder:
         print("No folder selected. Exiting.")
         sys.exit(0)
+    _save_last_folder(folder)
     return Path(folder)
 
 
@@ -72,6 +94,21 @@ def find_access_files(root: Path) -> list[Path]:
     for pattern in ("**/*.accdb", "**/*.mdb"):
         files.extend(root.glob(pattern))
     return sorted(set(files))
+
+
+def unique_output_path(path: Path) -> Path:
+    """Return a non-existing path by appending _1, _2, ... if needed."""
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    i = 1
+    while True:
+        candidate = parent / f"{stem}_{i}{suffix}"
+        if not candidate.exists():
+            return candidate
+        i += 1
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -396,8 +433,7 @@ def build_insert(table: str, cols: list[dict], rows: list[list]) -> list[str]:
 def export_db(accdb: Path, use_pyodbc: bool) -> None:
     stem      = accdb.stem
     out_dir   = accdb.parent
-    sql_path  = out_dir / f"{stem}.sql"
-    sqlite_path = out_dir / f"{stem}.sqlite"
+    sql_path  = unique_output_path(out_dir / f"{stem}.sql")
 
     print(f"\n  → Extracting: {accdb}")
 
@@ -419,35 +455,18 @@ def export_db(accdb: Path, use_pyodbc: bool) -> None:
         "",
     ]
 
-    # Write SQL file and populate SQLite
-    if sqlite_path.exists():
-        sqlite_path.unlink()
-    conn = sqlite3.connect(sqlite_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-
     for table, cols in schema.items():
         create_stmt = build_create_table(table, cols)
         sql_lines.append(create_stmt)
         sql_lines.append("")
-        conn.execute(create_stmt)
 
         inserts = build_insert(table, cols, data.get(table, []))
         sql_lines.extend(inserts)
         if inserts:
             sql_lines.append("")
-        for stmt in inserts:
-            try:
-                conn.execute(stmt)
-            except Exception as e:
-                print(f"    Warning: INSERT failed for {table}: {e}")
-
-    conn.commit()
-    conn.close()
 
     sql_path.write_text("\n".join(sql_lines), encoding="utf-8")
     print(f"    ✓ SQL    → {sql_path.relative_to(accdb.parent.parent) if accdb.parent.parent != accdb.parent else sql_path.name}")
-    print(f"    ✓ SQLite → {sqlite_path.name}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
