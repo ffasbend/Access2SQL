@@ -347,6 +347,70 @@ def _mdbtools_available() -> bool:
     return subprocess.run(["which", "mdb-tables"], capture_output=True).returncode == 0
 
 
+def _mdb_queries_available() -> bool:
+    return shutil.which("mdb-queries") is not None
+
+
+def list_saved_queries(accdb: Path) -> list[str]:
+    """Return saved query names for a database using mdbtools."""
+    result = subprocess.run(
+        ["mdb-queries", "-L", "-1", str(accdb)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "Failed to list saved queries")
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def get_saved_query_sql(accdb: Path, query_name: str) -> str:
+    """Return SQL text for one saved query using mdbtools."""
+    result = subprocess.run(
+        ["mdb-queries", str(accdb), query_name],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"Failed to extract query '{query_name}'")
+    return result.stdout.strip()
+
+
+def export_queries(accdb: Path) -> Path:
+    """Extract all saved queries and write them into a single text file."""
+    output_path = unique_output_path(accdb.with_name(f"{accdb.stem}_queries.txt"))
+    query_names = list_saved_queries(accdb)
+
+    lines: list[str] = [
+        f"Source database: {accdb}",
+        "",
+    ]
+
+    if not query_names:
+        lines.append("No saved queries found.")
+    else:
+        for query_name in query_names:
+            lines.append("=" * 60)
+            lines.append(f"QUERY NAME: {query_name}")
+            lines.append("-" * 60)
+            try:
+                sql = get_saved_query_sql(accdb, query_name)
+                lines.append(sql if sql else "(Empty SQL text)")
+            except Exception as exc:
+                lines.append(f"ERROR extracting query: {exc}")
+            lines.append("")
+
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    return output_path
+
+
 # mdbtools schema type string patterns
 _MDB_SCHEMA_TYPE_RE = re.compile(
     r"^\s*`?(\w+)`?\s+([\w /]+?)(?:\s*\([^)]*\))?\s*(?:NOT NULL|NULL|,|$)",
@@ -969,6 +1033,15 @@ def export_db(accdb: Path, use_pyodbc: bool) -> None:
 
     sql_path.write_text("\n".join(sql_lines), encoding="utf-8")
     print(f"    ✓ SQL    → {sql_path.relative_to(accdb.parent.parent) if accdb.parent.parent != accdb.parent else sql_path.name}")
+
+    if _mdb_queries_available():
+        try:
+            query_path = export_queries(accdb)
+            print(f"    ✓ QUERY  → {query_path.relative_to(accdb.parent.parent) if accdb.parent.parent != accdb.parent else query_path.name}")
+        except Exception as e:
+            print(f"    ! QUERY  export failed for {accdb.name}: {e}")
+    else:
+        print("    ! QUERY  skipped (mdb-queries not found)")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
