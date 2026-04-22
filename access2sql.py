@@ -220,6 +220,7 @@ def try_pyodbc(accdb: Path):
     for table in tables:
         cols_info = []
         primary_key: list[str] = []
+        foreign_keys: list[dict[str, object]] = []
         cursor.execute(f"SELECT * FROM [{table}] WHERE 1=0")
         for col in cursor.description:
             name      = col[0]
@@ -250,7 +251,33 @@ def try_pyodbc(accdb: Path):
         except Exception:
             primary_key = []
 
-        schema[table] = {"columns": cols_info, "primary_key": primary_key}
+        try:
+            fk_groups: dict[object, list] = {}
+            for row in cursor.foreignKeys(table=table):
+                key = getattr(row, "fk_name", None) or (
+                    getattr(row, "pktable_name", None),
+                    getattr(row, "fktable_name", None),
+                )
+                fk_groups.setdefault(key, []).append(row)
+            for rows in fk_groups.values():
+                rows = sorted(rows, key=lambda row: getattr(row, "key_seq", 0))
+                fk_columns = [row.fkcolumn_name for row in rows if getattr(row, "fkcolumn_name", None)]
+                ref_columns = [row.pkcolumn_name for row in rows if getattr(row, "pkcolumn_name", None)]
+                ref_table = getattr(rows[0], "pktable_name", None)
+                if fk_columns and ref_columns and ref_table:
+                    foreign_keys.append({
+                        "columns": fk_columns,
+                        "ref_table": ref_table,
+                        "ref_columns": ref_columns,
+                    })
+        except Exception:
+            foreign_keys = []
+
+        schema[table] = {
+            "columns": cols_info,
+            "primary_key": primary_key,
+            "foreign_keys": foreign_keys,
+        }
 
         cursor.execute(f"SELECT * FROM [{table}]")
         data[table] = [list(row) for row in cursor.fetchall()]
@@ -318,6 +345,12 @@ def try_mdbtools(accdb: Path):
     )
     ddl_types: dict[str, dict[str, str]] = {}
     ddl_primary_keys: dict[str, list[str]] = {}
+    ddl_foreign_keys: dict[str, list[dict[str, object]]] = {}
+    alter_fk_re = re.compile(
+        r"ALTER\s+TABLE\s+`?([^`\s(]+)`?\s+ADD\s+CONSTRAINT\s+`?([^`\s]+)`?\s+"
+        r"FOREIGN\s+KEY\s*\((.+?)\)\s+REFERENCES\s+`?([^`\s(]+)`?\s*\((.+?)\);",
+        re.IGNORECASE,
+    )
     for m in table_ddl_re.finditer(ddl):
         tname = m.group(1)
         body  = m.group(2)
@@ -343,6 +376,7 @@ def try_mdbtools(accdb: Path):
                 col_types[cname] = ctype
         ddl_types[tname] = col_types
         ddl_primary_keys[tname] = primary_key
+        ddl_foreign_keys.setdefault(tname, [])
 
     for m in alter_pk_re.finditer(ddl):
         tname = m.group(1)
@@ -350,6 +384,17 @@ def try_mdbtools(accdb: Path):
             part.strip().strip("`").strip('"')
             for part in m.group(2).split(",")
         ]
+
+    for m in alter_fk_re.finditer(ddl):
+        tname = m.group(1)
+        fk_columns = [part.strip().strip("`").strip('"') for part in m.group(3).split(",")]
+        ref_table = m.group(4).strip().strip("`").strip('"')
+        ref_columns = [part.strip().strip("`").strip('"') for part in m.group(5).split(",")]
+        ddl_foreign_keys.setdefault(tname, []).append({
+            "columns": fk_columns,
+            "ref_table": ref_table,
+            "ref_columns": ref_columns,
+        })
 
     for table in tables:
         # Export data as CSV
@@ -370,7 +415,11 @@ def try_mdbtools(accdb: Path):
                 "access_type": atype,
                 "sqlite_type": access_type_to_sqlite(atype),
             })
-        schema[table] = {"columns": cols_info, "primary_key": ddl_primary_keys.get(table, [])}
+        schema[table] = {
+            "columns": cols_info,
+            "primary_key": ddl_primary_keys.get(table, []),
+            "foreign_keys": ddl_foreign_keys.get(table, []),
+        }
 
         # Parse data rows
         rows = []
@@ -434,13 +483,25 @@ def quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def build_create_table(table: str, cols: list[dict], primary_key: list[str] | None = None) -> str:
+def build_create_table(
+    table: str,
+    cols: list[dict],
+    primary_key: list[str] | None = None,
+    foreign_keys: list[dict[str, object]] | None = None,
+) -> str:
     col_defs = []
     for col in cols:
         col_defs.append(f"  {quote_ident(col['name'])} {col['sqlite_type']}")
     if primary_key:
         pk_cols = ", ".join(quote_ident(col) for col in primary_key)
         col_defs.append(f"  PRIMARY KEY ({pk_cols})")
+    for foreign_key in foreign_keys or []:
+        fk_cols = ", ".join(quote_ident(col) for col in foreign_key["columns"])
+        ref_cols = ", ".join(quote_ident(col) for col in foreign_key["ref_columns"])
+        ref_table = quote_ident(foreign_key["ref_table"])
+        col_defs.append(
+            f"  FOREIGN KEY ({fk_cols}) REFERENCES {ref_table} ({ref_cols})"
+        )
     return (
         f"CREATE TABLE IF NOT EXISTS {quote_ident(table)} (\n"
         + ",\n".join(col_defs)
@@ -462,6 +523,38 @@ def build_insert(table: str, cols: list[dict], rows: list[list]) -> list[str]:
             f"INSERT INTO {quote_ident(table)} ({col_names}) VALUES ({', '.join(values)});"
         )
     return stmts
+
+
+def order_tables_by_dependencies(schema: dict[str, dict[str, object]]) -> list[str]:
+    """Return tables ordered so referenced tables come before dependent tables."""
+    table_names = list(schema.keys())
+    remaining = set(table_names)
+    dependencies: dict[str, set[str]] = {}
+
+    for table in table_names:
+        foreign_keys = schema[table].get("foreign_keys", [])
+        refs = {
+            fk["ref_table"]
+            for fk in foreign_keys
+            if fk.get("ref_table") in schema and fk.get("ref_table") != table
+        }
+        dependencies[table] = refs
+
+    ordered: list[str] = []
+    while remaining:
+        ready = [table for table in table_names if table in remaining and not dependencies[table]]
+        if not ready:
+            # Cycles or unresolved metadata: keep stable original order for the rest.
+            ordered.extend([table for table in table_names if table in remaining])
+            break
+
+        for table in ready:
+            ordered.append(table)
+            remaining.remove(table)
+        for deps in dependencies.values():
+            deps.difference_update(ready)
+
+    return ordered
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -493,12 +586,20 @@ def export_db(accdb: Path, use_pyodbc: bool) -> None:
         "",
     ]
 
-    for table, table_schema in schema.items():
+    table_order = order_tables_by_dependencies(schema)
+
+    for table in table_order:
+        table_schema = schema[table]
         cols = table_schema["columns"]
         primary_key = table_schema.get("primary_key", [])
-        create_stmt = build_create_table(table, cols, primary_key)
+        foreign_keys = table_schema.get("foreign_keys", [])
+        create_stmt = build_create_table(table, cols, primary_key, foreign_keys)
         sql_lines.append(create_stmt)
         sql_lines.append("")
+
+    for table in table_order:
+        table_schema = schema[table]
+        cols = table_schema["columns"]
 
         inserts = build_insert(table, cols, data.get(table, []))
         sql_lines.extend(inserts)
