@@ -221,6 +221,17 @@ def try_pyodbc(accdb: Path):
         cols_info = []
         primary_key: list[str] = []
         foreign_keys: list[dict[str, object]] = []
+        nullable_by_name: dict[str, bool] = {}
+
+        try:
+            for row in cursor.columns(table=table):
+                column_name = getattr(row, "column_name", None)
+                nullable = getattr(row, "nullable", None)
+                if column_name is not None and nullable is not None:
+                    nullable_by_name[column_name] = bool(nullable)
+        except Exception:
+            nullable_by_name = {}
+
         cursor.execute(f"SELECT * FROM [{table}] WHERE 1=0")
         for col in cursor.description:
             name      = col[0]
@@ -239,8 +250,12 @@ def try_pyodbc(accdb: Path):
                 atype = "ole object"
             else:
                 atype = "text"
-            cols_info.append({"name": name, "access_type": atype,
-                               "sqlite_type": access_type_to_sqlite(atype)})
+            cols_info.append({
+                "name": name,
+                "access_type": atype,
+                "sqlite_type": access_type_to_sqlite(atype),
+                "not_null": not nullable_by_name.get(name, True),
+            })
 
         try:
             pk_rows = sorted(
@@ -250,6 +265,11 @@ def try_pyodbc(accdb: Path):
             primary_key = [row.column_name for row in pk_rows if getattr(row, "column_name", None)]
         except Exception:
             primary_key = []
+
+        primary_key_set = set(primary_key)
+        for col in cols_info:
+            if col["name"] in primary_key_set:
+                col["not_null"] = True
 
         try:
             fk_groups: dict[object, list] = {}
@@ -355,6 +375,7 @@ def try_mdbtools(accdb: Path):
         tname = m.group(1)
         body  = m.group(2)
         col_types: dict[str, str] = {}
+        col_not_null: dict[str, bool] = {}
         primary_key: list[str] = []
         for line in body.splitlines():
             line = line.strip().rstrip(",")
@@ -374,7 +395,10 @@ def try_mdbtools(accdb: Path):
                 cname = cm.group(1)
                 ctype = cm.group(2).strip()
                 col_types[cname] = ctype
+                col_not_null[cname] = "NOT NULL" in upper_line
         ddl_types[tname] = col_types
+        ddl_not_null = ddl_foreign_keys.setdefault("__not_null__", {})
+        ddl_not_null[tname] = col_not_null
         ddl_primary_keys[tname] = primary_key
         ddl_foreign_keys.setdefault(tname, [])
 
@@ -407,6 +431,8 @@ def try_mdbtools(accdb: Path):
 
         # Build schema from DDL types
         type_map = ddl_types.get(table, {})
+        not_null_map = ddl_foreign_keys.get("__not_null__", {}).get(table, {})
+        primary_key_set = set(ddl_primary_keys.get(table, []))
         cols_info = []
         for cname in col_names:
             atype = type_map.get(cname, "text")
@@ -414,6 +440,7 @@ def try_mdbtools(accdb: Path):
                 "name":        cname,
                 "access_type": atype,
                 "sqlite_type": access_type_to_sqlite(atype),
+                "not_null":    not_null_map.get(cname, False) or cname in primary_key_set,
             })
         schema[table] = {
             "columns": cols_info,
@@ -491,7 +518,8 @@ def build_create_table(
 ) -> str:
     col_defs = []
     for col in cols:
-        col_defs.append(f"  {quote_ident(col['name'])} {col['sqlite_type']}")
+        nullability = "NOT NULL" if col.get("not_null") else "NULL"
+        col_defs.append(f"  {quote_ident(col['name'])} {col['sqlite_type']} {nullability}")
     if primary_key:
         pk_cols = ", ".join(quote_ident(col) for col in primary_key)
         col_defs.append(f"  PRIMARY KEY ({pk_cols})")
