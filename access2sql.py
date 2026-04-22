@@ -128,6 +128,14 @@ def unique_output_path(path: Path) -> Path:
         i += 1
 
 
+def order_columns_with_primary_key_first(col_names: list[str], primary_key: list[str]) -> list[str]:
+    """Keep source column order, but move primary key columns to the front."""
+    primary_key_set = set(primary_key)
+    ordered = [name for name in primary_key if name in col_names]
+    ordered.extend(name for name in col_names if name not in primary_key_set)
+    return ordered
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Type mapping helpers
 # ══════════════════════════════════════════════════════════════════════════════
@@ -540,7 +548,6 @@ def try_mdbtools(accdb: Path):
 
     for table in tables:
         datetime_mode_map = read_datetime_modes_from_mdb_prop(accdb, table)
-        access_column_order = read_column_order_from_mdb_prop(accdb, table)
         currency_columns = read_currency_columns_from_mdb_prop(accdb, table)
 
         # Export data as CSV
@@ -550,12 +557,13 @@ def try_mdbtools(accdb: Path):
 
         header_line = csv_hdr.splitlines()[0] if csv_hdr.strip() else ""
         exported_col_names = _parse_csv_line(header_line) if header_line else []
-        schema_col_names = access_column_order or ddl_column_order.get(table, [])
+        schema_col_names = ddl_column_order.get(table, []) or exported_col_names
         if schema_col_names:
             col_names = [name for name in schema_col_names if name in exported_col_names]
             col_names.extend(name for name in exported_col_names if name not in schema_col_names)
         else:
             col_names = exported_col_names
+        col_names = order_columns_with_primary_key_first(col_names, ddl_primary_keys.get(table, []))
 
         # Build schema from DDL types
         type_map = ddl_types.get(table, {})
@@ -685,26 +693,6 @@ def read_datetime_modes_from_mdb_prop(accdb: Path, table: str) -> dict[str, dict
             current_props[key] = value
     flush()
     return mode_map
-
-
-def read_column_order_from_mdb_prop(accdb: Path, table: str) -> list[str]:
-    """Return field order as reported by Access metadata via mdb-prop."""
-    try:
-        text = _run(["mdb-prop", str(accdb), table], check=False)
-    except Exception:
-        return []
-    if not text.strip():
-        return []
-
-    column_names: list[str] = []
-    for line in text.splitlines():
-        m_name = re.match(r"^name:\s*(.+)\s*$", line)
-        if not m_name:
-            continue
-        column_name = m_name.group(1).strip()
-        if column_name and column_name != "(none)":
-            column_names.append(column_name)
-    return column_names
 
 
 def read_currency_columns_from_mdb_prop(accdb: Path, table: str) -> set[str]:
