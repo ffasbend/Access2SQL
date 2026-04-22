@@ -8,7 +8,7 @@ find every .accdb / .mdb file, extract all tables + data, and produce:
 
 Type mapping from Access → SQLite:
   Text / Memo / Hyperlink  → TEXT COLLATE NOCASE
-  Date/Time                → TEXT (stored as ISO-8601, cast with datetime())
+  Date/Time                → DATETIME
   Yes/No (Boolean)         → INTEGER (0/1)  -- SQLite has no BOOLEAN type
   AutoNumber / Long Integer → INTEGER
   Integer                  → INTEGER
@@ -132,8 +132,8 @@ _TYPE_MAP = {
     "decimal":    "REAL",
     "numeric":    "REAL",
     # Date
-    "date/time":  "TEXT",          # stored as ISO-8601
-    "datetime":   "TEXT",
+    "date/time":  "DATETIME",
+    "datetime":   "DATETIME",
     # Boolean
     "yes/no":     "INTEGER",       # 0 / 1
     "boolean":    "INTEGER",
