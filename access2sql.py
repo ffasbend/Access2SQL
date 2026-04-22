@@ -836,22 +836,11 @@ def merge_foreign_keys(
             if existing is None:
                 rel_copy = dict(rel_fk)
                 rel_copy["ref_table"] = _resolve_table_name(rel_fk.get("ref_table"), known_tables)
-                # Some mdbtools versions export user relationship flags as grbit=0
-                # even when cascade is enabled in Access. Preserve cascade intent
-                # when relationship metadata exists but action flags are missing.
-                if rel_copy.get("on_update") is None:
-                    rel_copy["on_update"] = "CASCADE"
-                if rel_copy.get("on_delete") is None:
-                    rel_copy["on_delete"] = "CASCADE"
                 bucket.append(rel_copy)
                 continue
             if rel_fk.get("on_update") == "CASCADE":
                 existing["on_update"] = "CASCADE"
-            elif existing.get("on_update") is None:
-                existing["on_update"] = "CASCADE"
             if rel_fk.get("on_delete") == "CASCADE":
-                existing["on_delete"] = "CASCADE"
-            elif existing.get("on_delete") is None:
                 existing["on_delete"] = "CASCADE"
 
     return merged
