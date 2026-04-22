@@ -9,7 +9,7 @@ find every .accdb / .mdb file, extract all tables + data, and produce:
 Type mapping from Access → SQLite:
   Text / Memo / Hyperlink  → TEXT COLLATE NOCASE
   Date/Time                → DATETIME
-  Yes/No (Boolean)         → INTEGER (0/1)  -- SQLite has no BOOLEAN type
+  Yes/No (Boolean)         → BOOLEAN (0/1)
   AutoNumber / Long Integer → INTEGER
   Integer                  → INTEGER
   Single / Double / Currency / Decimal → REAL
@@ -135,9 +135,9 @@ _TYPE_MAP = {
     "date/time":  "DATETIME",
     "datetime":   "DATETIME",
     # Boolean
-    "yes/no":     "INTEGER",       # 0 / 1
-    "boolean":    "INTEGER",
-    "bit":        "INTEGER",
+    "yes/no":     "BOOLEAN",
+    "boolean":    "BOOLEAN",
+    "bit":        "BOOLEAN",
     # Binary
     "ole object": "BLOB",
     "binary":     "BLOB",
@@ -160,7 +160,7 @@ def format_value(value, sqlite_type: str) -> str:
 
     st = sqlite_type.upper()
 
-    if "INTEGER" in st:
+    if "INTEGER" in st or "BOOLEAN" in st:
         # Boolean: Access stores as -1 (True) / 0 (False)
         if isinstance(value, bool):
             return "1" if value else "0"
@@ -481,7 +481,7 @@ def _coerce_value(raw: str, sqlite_type: str) -> object:
     if raw == "" or raw.lower() == "null":
         return None
     st = sqlite_type.upper()
-    if "INTEGER" in st:
+    if "INTEGER" in st or "BOOLEAN" in st:
         try:
             return int(raw)
         except ValueError:
