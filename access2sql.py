@@ -471,6 +471,7 @@ def try_mdbtools(accdb: Path):
         re.IGNORECASE,
     )
     ddl_types: dict[str, dict[str, str]] = {}
+    ddl_column_order: dict[str, list[str]] = {}
     ddl_primary_keys: dict[str, list[str]] = {}
     ddl_foreign_keys: dict[str, list[dict[str, object]]] = {}
     alter_fk_re = re.compile(
@@ -482,6 +483,7 @@ def try_mdbtools(accdb: Path):
         tname = m.group(1)
         body  = m.group(2)
         col_types: dict[str, str] = {}
+        col_order: list[str] = []
         col_not_null: dict[str, bool] = {}
         primary_key: list[str] = []
         for line in body.splitlines():
@@ -501,9 +503,11 @@ def try_mdbtools(accdb: Path):
             if cm:
                 cname = cm.group(1)
                 ctype = cm.group(2).strip()
+                col_order.append(cname)
                 col_types[cname] = ctype
                 col_not_null[cname] = "NOT NULL" in upper_line
         ddl_types[tname] = col_types
+        ddl_column_order[tname] = col_order
         ddl_not_null = ddl_foreign_keys.setdefault("__not_null__", {})
         ddl_not_null[tname] = col_not_null
         ddl_primary_keys[tname] = primary_key
@@ -536,6 +540,7 @@ def try_mdbtools(accdb: Path):
 
     for table in tables:
         datetime_mode_map = read_datetime_modes_from_mdb_prop(accdb, table)
+        access_column_order = read_column_order_from_mdb_prop(accdb, table)
         currency_columns = read_currency_columns_from_mdb_prop(accdb, table)
 
         # Export data as CSV
@@ -544,7 +549,13 @@ def try_mdbtools(accdb: Path):
         csv_hdr = _run(["mdb-export", db, table], check=False)
 
         header_line = csv_hdr.splitlines()[0] if csv_hdr.strip() else ""
-        col_names = _parse_csv_line(header_line) if header_line else []
+        exported_col_names = _parse_csv_line(header_line) if header_line else []
+        schema_col_names = access_column_order or ddl_column_order.get(table, [])
+        if schema_col_names:
+            col_names = [name for name in schema_col_names if name in exported_col_names]
+            col_names.extend(name for name in exported_col_names if name not in schema_col_names)
+        else:
+            col_names = exported_col_names
 
         # Build schema from DDL types
         type_map = ddl_types.get(table, {})
@@ -577,9 +588,10 @@ def try_mdbtools(accdb: Path):
             if not line.strip():
                 continue
             raw_vals = _parse_csv_line(line)
+            row_by_name = dict(zip(exported_col_names, raw_vals))
             typed_vals = []
-            for i, v in enumerate(raw_vals):
-                col = cols_info[i] if i < len(cols_info) else {"sqlite_type": "TEXT COLLATE NOCASE"}
+            for col in cols_info:
+                v = row_by_name.get(col["name"], "")
                 typed_vals.append(_coerce_value(v, col["sqlite_type"]))
             rows.append(typed_vals)
         data[table] = rows
@@ -614,6 +626,7 @@ def datetime_settings_from_access_format(fmt: str | None) -> dict[str, object]:
         settings["mode"] = "time"
         settings["include_seconds"] = False
         return settings
+
     if "long time" in f:
         settings["mode"] = "time"
         settings["include_seconds"] = True
@@ -672,6 +685,26 @@ def read_datetime_modes_from_mdb_prop(accdb: Path, table: str) -> dict[str, dict
             current_props[key] = value
     flush()
     return mode_map
+
+
+def read_column_order_from_mdb_prop(accdb: Path, table: str) -> list[str]:
+    """Return field order as reported by Access metadata via mdb-prop."""
+    try:
+        text = _run(["mdb-prop", str(accdb), table], check=False)
+    except Exception:
+        return []
+    if not text.strip():
+        return []
+
+    column_names: list[str] = []
+    for line in text.splitlines():
+        m_name = re.match(r"^name:\s*(.+)\s*$", line)
+        if not m_name:
+            continue
+        column_name = m_name.group(1).strip()
+        if column_name and column_name != "(none)":
+            column_names.append(column_name)
+    return column_names
 
 
 def read_currency_columns_from_mdb_prop(accdb: Path, table: str) -> set[str]:
