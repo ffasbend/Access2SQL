@@ -1,0 +1,11 @@
+# Python dependencies for access2sql.py
+pyodbc>=5.1.0
+
+# System dependencies (install outside pip):
+# - macOS:   brew install mdbtools unixodbc
+# - Linux:   install mdbtools + unixODBC via your package manager
+# - Windows: install Microsoft Access Database Engine (ODBC driver)
+#
+# Notes:
+# - tkinter is part of the standard Python distribution (no pip package needed).
+# - The script can run with mdbtools CLI on macOS/Linux even if pyodbc is unavailable.

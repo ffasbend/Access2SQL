@@ -1,0 +1,9 @@
+name: access2sql
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - pyodbc
+  - mdbtools
+  - unixodbc
+  - tk

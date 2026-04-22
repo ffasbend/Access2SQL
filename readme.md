@@ -17,14 +17,44 @@ Type mapping from Access → SQLite:
   -  OLE Object / Binary      → BLOB
   -  everything else          → TEXT COLLATE NOCASE
 
-Requirements (install once):
-  ```
-  pip install pyodbc     # on macOS needs mdbtools (brew install mdbtools)
-  ```
-  -- OR --
-  ```
-  pip install pywin32    # Windows only (uses COM / DAO)
-  ```
+## How to install
+
+You can use either Conda (recommended for easiest cross-machine setup) or pip.
+
+### Option A: Conda (recommended)
+
+1. Create the environment:
+
+  conda env create -f environment.yml
+
+2. Activate it:
+
+  conda activate access2sql
+
+3. Run the script:
+
+  python access2sql.py
+
+### Option B: pip + system packages
+
+1. Install Python dependency:
+
+  pip install -r requirements.txt
+
+2. Install required system tools:
+
+   - macOS (Homebrew): install mdbtools and unixodbc
+   - Linux: install mdbtools and unixODBC from your package manager
+   - Windows: install Microsoft Access Database Engine (ODBC driver)
+
+3. Run the script:
+
+  python access2sql.py
+
+Notes:
+
+- tkinter is included with standard Python distributions on most systems.
+- On macOS/Linux, the script can use mdbtools CLI fallback even if pyodbc is not available.
 
 This script auto-detects the platform and picks the right backend.
 On macOS it falls back to the `mdbtools` CLI utilities (mdb-tables, mdb-export,
