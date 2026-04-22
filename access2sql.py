@@ -297,10 +297,14 @@ def try_pyodbc(accdb: Path):
                 ref_columns = [row.pkcolumn_name for row in rows if getattr(row, "pkcolumn_name", None)]
                 ref_table = getattr(rows[0], "pktable_name", None)
                 if fk_columns and ref_columns and ref_table:
+                    on_update = _odbc_rule_to_action(getattr(rows[0], "update_rule", None))
+                    on_delete = _odbc_rule_to_action(getattr(rows[0], "delete_rule", None))
                     foreign_keys.append({
                         "columns": fk_columns,
                         "ref_table": ref_table,
                         "ref_columns": ref_columns,
+                        "on_update": on_update,
+                        "on_delete": on_delete,
                     })
         except Exception:
             foreign_keys = []
@@ -382,7 +386,7 @@ def try_mdbtools(accdb: Path):
     ddl_foreign_keys: dict[str, list[dict[str, object]]] = {}
     alter_fk_re = re.compile(
         r"ALTER\s+TABLE\s+`?([^`\s(]+)`?\s+ADD\s+CONSTRAINT\s+`?([^`\s]+)`?\s+"
-        r"FOREIGN\s+KEY\s*\((.+?)\)\s+REFERENCES\s+`?([^`\s(]+)`?\s*\((.+?)\);",
+        r"FOREIGN\s+KEY\s*\((.+?)\)\s+REFERENCES\s+`?([^`\s(]+)`?\s*\((.+?)\)\s*(.*?);",
         re.IGNORECASE,
     )
     for m in table_ddl_re.finditer(ddl):
@@ -428,11 +432,18 @@ def try_mdbtools(accdb: Path):
         fk_columns = [part.strip().strip("`").strip('"') for part in m.group(3).split(",")]
         ref_table = m.group(4).strip().strip("`").strip('"')
         ref_columns = [part.strip().strip("`").strip('"') for part in m.group(5).split(",")]
+        tail = m.group(6) or ""
+        on_update = _parse_fk_action_from_tail(tail, "update")
+        on_delete = _parse_fk_action_from_tail(tail, "delete")
         ddl_foreign_keys.setdefault(tname, []).append({
             "columns": fk_columns,
             "ref_table": ref_table,
             "ref_columns": ref_columns,
+            "on_update": on_update,
+            "on_delete": on_delete,
         })
+
+    merged_foreign_keys = merge_foreign_keys(ddl_foreign_keys, read_msys_relationships(accdb))
 
     for table in tables:
         datetime_mode_map = read_datetime_modes_from_mdb_prop(accdb, table)
@@ -463,7 +474,7 @@ def try_mdbtools(accdb: Path):
         schema[table] = {
             "columns": cols_info,
             "primary_key": ddl_primary_keys.get(table, []),
-            "foreign_keys": ddl_foreign_keys.get(table, []),
+            "foreign_keys": merged_foreign_keys.get(table, []),
         }
 
         # Parse data rows
@@ -552,6 +563,88 @@ def read_datetime_modes_from_mdb_prop(accdb: Path, table: str) -> dict[str, str]
             current_props[key] = value
     flush()
     return mode_map
+
+
+def read_msys_relationships(accdb: Path) -> dict[str, list[dict[str, object]]]:
+    """Read relationship metadata from MSysRelationships, including cascade flags."""
+    try:
+        text = _run(["mdb-export", str(accdb), "MSysRelationships"], check=False)
+    except Exception:
+        return {}
+    if not text.strip():
+        return {}
+
+    import csv
+    import io
+
+    by_name: dict[str, list[dict[str, str]]] = {}
+    reader = csv.DictReader(io.StringIO(text))
+    for row in reader:
+        rel_name = (row.get("szRelationship") or "").strip()
+        if not rel_name:
+            continue
+        by_name.setdefault(rel_name, []).append(row)
+
+    relationships: dict[str, list[dict[str, object]]] = {}
+    for rel_rows in by_name.values():
+        rel_rows.sort(key=lambda row: int((row.get("icolumn") or row.get("ccolumn") or "0") or "0"))
+        sample = rel_rows[0]
+        child_table = (sample.get("szObject") or "").strip()
+        parent_table = (sample.get("szReferencedObject") or "").strip()
+        child_columns = [(row.get("szColumn") or "").strip() for row in rel_rows]
+        parent_columns = [(row.get("szReferencedColumn") or "").strip() for row in rel_rows]
+        if not child_table or not parent_table or not all(child_columns) or not all(parent_columns):
+            continue
+
+        grbit_raw = (sample.get("grbit") or "0").strip()
+        try:
+            grbit = int(grbit_raw)
+        except ValueError:
+            grbit = 0
+
+        relationships.setdefault(child_table, []).append({
+            "columns": child_columns,
+            "ref_table": parent_table,
+            "ref_columns": parent_columns,
+            "on_update": "CASCADE" if grbit & 256 else None,
+            "on_delete": "CASCADE" if grbit & 4096 else None,
+        })
+
+    return relationships
+
+
+def merge_foreign_keys(
+    ddl_foreign_keys: dict[str, list[dict[str, object]]],
+    relationship_foreign_keys: dict[str, list[dict[str, object]]],
+) -> dict[str, list[dict[str, object]]]:
+    """Merge FK metadata, preserving parsed keys and supplementing from system tables."""
+    merged = {
+        table: list(fks)
+        for table, fks in ddl_foreign_keys.items()
+        if table != "__not_null__"
+    }
+
+    for table, rel_fks in relationship_foreign_keys.items():
+        bucket = merged.setdefault(table, [])
+        for rel_fk in rel_fks:
+            existing = None
+            for fk in bucket:
+                if (
+                    fk.get("columns") == rel_fk.get("columns")
+                    and fk.get("ref_table") == rel_fk.get("ref_table")
+                    and fk.get("ref_columns") == rel_fk.get("ref_columns")
+                ):
+                    existing = fk
+                    break
+            if existing is None:
+                bucket.append(dict(rel_fk))
+                continue
+            if rel_fk.get("on_update") == "CASCADE":
+                existing["on_update"] = "CASCADE"
+            if rel_fk.get("on_delete") == "CASCADE":
+                existing["on_delete"] = "CASCADE"
+
+    return merged
 
 
 def _parse_datetime_like(value: Any) -> datetime | None:
@@ -686,14 +779,51 @@ def build_create_table(
         fk_cols = ", ".join(quote_ident(col) for col in foreign_key["columns"])
         ref_cols = ", ".join(quote_ident(col) for col in foreign_key["ref_columns"])
         ref_table = quote_ident(foreign_key["ref_table"])
-        col_defs.append(
-            f"  FOREIGN KEY ({fk_cols}) REFERENCES {ref_table} ({ref_cols})"
-        )
+        fk_clause = f"  FOREIGN KEY ({fk_cols}) REFERENCES {ref_table} ({ref_cols})"
+        if foreign_key.get("on_delete") == "CASCADE":
+            fk_clause += " ON DELETE CASCADE"
+        if foreign_key.get("on_update") == "CASCADE":
+            fk_clause += " ON UPDATE CASCADE"
+        col_defs.append(fk_clause)
     return (
         f"CREATE TABLE IF NOT EXISTS {quote_ident(table)} (\n"
         + ",\n".join(col_defs)
         + "\n);"
     )
+
+
+def _odbc_rule_to_action(rule: Any) -> str | None:
+    """Map ODBC foreign key rule value to action name."""
+    if rule is None:
+        return None
+    if isinstance(rule, str):
+        value = rule.strip().upper().replace(" ", "_")
+        if value in {"CASCADE", "NO_ACTION", "RESTRICT", "SET_NULL", "SET_DEFAULT"}:
+            return value
+        return None
+    try:
+        num = int(rule)
+    except (ValueError, TypeError):
+        return None
+
+    # ODBC constants: SQL_CASCADE=0, SQL_RESTRICT=1, SQL_SET_NULL=2,
+    # SQL_NO_ACTION=3, SQL_SET_DEFAULT=4
+    mapping = {
+        0: "CASCADE",
+        1: "RESTRICT",
+        2: "SET_NULL",
+        3: "NO_ACTION",
+        4: "SET_DEFAULT",
+    }
+    return mapping.get(num)
+
+
+def _parse_fk_action_from_tail(tail: str, action: str) -> str | None:
+    """Parse ON UPDATE/ON DELETE action from FK tail SQL."""
+    m = re.search(rf"ON\s+{action}\s+(CASCADE|RESTRICT|NO\s+ACTION|SET\s+NULL|SET\s+DEFAULT)", tail, re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1).upper().replace(" ", "_")
 
 
 def build_insert(table: str, cols: list[dict], rows: list[list]) -> list[str]:
