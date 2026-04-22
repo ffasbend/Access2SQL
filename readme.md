@@ -12,7 +12,8 @@ Type mapping from Access → SQLite:
   -  Yes/No (Boolean)         → INTEGER (0/1)  -- SQLite has no BOOLEAN type
   -  AutoNumber / Long Integer → INTEGER
   -  Integer                  → INTEGER
-  -  Single / Double / Currency / Decimal → REAL
+  -  Single / Double / Decimal → REAL
+  -  Currency                  → CURRENCY (treated as REAL)
   -  OLE Object / Binary      → BLOB
   -  everything else          → TEXT COLLATE NOCASE
 

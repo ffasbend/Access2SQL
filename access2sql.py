@@ -12,7 +12,8 @@ Type mapping from Access → SQLite:
   Yes/No (Boolean)         → BOOLEAN (0/1)
   AutoNumber / Long Integer → INTEGER
   Integer / Number        → INTEGER
-  Single / Double / Currency / Decimal → REAL
+    Single / Double / Decimal → REAL
+    Currency                  → CURRENCY (treated as REAL)
   OLE Object / Binary      → BLOB
   everything else          → TEXT COLLATE NOCASE
 
@@ -131,7 +132,7 @@ def unique_output_path(path: Path) -> Path:
 # Type mapping helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Map Access type names (lowercase) → SQLite column type declaration
+# Map Access type names (lowercase) → SQL column type declaration
 _TYPE_MAP = {
     # Text-like
     "text":       "TEXT COLLATE NOCASE",
@@ -150,7 +151,8 @@ _TYPE_MAP = {
     "single":     "REAL",
     "double":     "REAL",
     "float":      "REAL",
-    "currency":   "REAL",
+    "currency":   "CURRENCY",
+    "money":      "CURRENCY",
     "decimal":    "REAL",
     "numeric":    "REAL",
     # Date
@@ -194,7 +196,8 @@ def format_value(value, sqlite_type: str) -> str:
         except (ValueError, TypeError):
             return "NULL"
 
-    if "REAL" in st:
+    # Treat CURRENCY as REAL for value formatting.
+    if "REAL" in st or "CURRENCY" in st:
         try:
             return repr(float(value))
         except (ValueError, TypeError):
@@ -533,6 +536,7 @@ def try_mdbtools(accdb: Path):
 
     for table in tables:
         datetime_mode_map = read_datetime_modes_from_mdb_prop(accdb, table)
+        currency_columns = read_currency_columns_from_mdb_prop(accdb, table)
 
         # Export data as CSV
         csv_out = _run(["mdb-export", "-H", db, table], check=False)
@@ -550,6 +554,8 @@ def try_mdbtools(accdb: Path):
         for cname in col_names:
             atype = type_map.get(cname, "text")
             sqlite_type = access_type_to_sqlite(atype)
+            if cname in currency_columns:
+                sqlite_type = "CURRENCY"
             cols_info.append({
                 "name":        cname,
                 "access_type": atype,
@@ -666,6 +672,53 @@ def read_datetime_modes_from_mdb_prop(accdb: Path, table: str) -> dict[str, dict
             current_props[key] = value
     flush()
     return mode_map
+
+
+def read_currency_columns_from_mdb_prop(accdb: Path, table: str) -> set[str]:
+    """Return column names that should be treated as Access Currency."""
+    try:
+        text = _run(["mdb-prop", str(accdb), table], check=False)
+    except Exception:
+        return set()
+    if not text.strip():
+        return set()
+
+    currency_columns: set[str] = set()
+    current_col: str | None = None
+    current_props: dict[str, str] = {}
+
+    def flush() -> None:
+        nonlocal current_col, current_props
+        if not current_col or current_col == "(none)":
+            return
+        lcid_raw = (current_props.get("CurrencyLCID") or "").strip()
+        fmt = (current_props.get("Format") or "").strip().lower()
+
+        is_currency_lcid = False
+        if lcid_raw:
+            try:
+                is_currency_lcid = int(lcid_raw) > 0
+            except ValueError:
+                is_currency_lcid = False
+
+        has_currency_format = bool(re.search(r"currency|[€$£¥₹]", fmt))
+        if is_currency_lcid or has_currency_format:
+            currency_columns.add(current_col)
+
+    for line in text.splitlines():
+        m_name = re.match(r"^name:\s*(.+)\s*$", line)
+        if m_name:
+            flush()
+            current_col = m_name.group(1).strip()
+            current_props = {}
+            continue
+        m_prop = re.match(r"^\s+([^:]+):\s*(.*)$", line)
+        if m_prop and current_col is not None:
+            key = m_prop.group(1).strip()
+            value = m_prop.group(2).strip()
+            current_props[key] = value
+    flush()
+    return currency_columns
 
 
 def read_msys_relationships(accdb: Path) -> dict[str, list[dict[str, object]]]:
@@ -857,7 +910,8 @@ def _coerce_value(raw: str, sqlite_type: str) -> object:
             if raw.lower() in ("false", "no", "0"):
                 return 0
             return None
-    if "REAL" in st:
+    # Treat CURRENCY as REAL for value coercion.
+    if "REAL" in st or "CURRENCY" in st:
         try:
             return float(raw)
         except ValueError:
