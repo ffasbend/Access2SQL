@@ -378,6 +378,336 @@ def _mdb_queries_available() -> bool:
     return shutil.which("mdb-queries") is not None
 
 
+def _mdb_sql_available() -> bool:
+    return shutil.which("mdb-sql") is not None
+
+
+def _run_mdb_sql(accdb: Path, sql: str) -> str:
+    """Run a SQL statement against an Access DB via mdb-sql and return raw output."""
+    if not _mdb_sql_available():
+        return ""
+    result = subprocess.run(
+        ["mdb-sql", "-P", "-H", "-F", "-d", "|", str(accdb)],
+        input=sql + "\nquit\n",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _lookup_query_object_id(accdb: Path, query_name: str) -> int | None:
+    """Return object id in MSysObjects for a saved query name."""
+    escaped = query_name.replace("'", "''")
+    out = _run_mdb_sql(accdb, f"select Id from MSysObjects where Name='{escaped}';")
+    if not out:
+        return None
+    first = out.splitlines()[0].strip()
+    try:
+        return int(first)
+    except ValueError:
+        return None
+
+
+def _load_msysquery_rows(accdb: Path, object_id: int) -> list[dict[str, str]]:
+    """Load compact MSysQueries rows for one object id."""
+    out = _run_mdb_sql(
+        accdb,
+        (
+            "select Attribute,Flag,Name1,Name2,Expression "
+            f"from MSysQueries where ObjectId={object_id};"
+        ),
+    )
+    rows: list[dict[str, str]] = []
+    if not out:
+        return rows
+    for line in out.splitlines():
+        parts = line.split("|", 4)
+        if len(parts) < 5:
+            # Some Expression values are multiline; mdb-sql emits continuation
+            # lines without delimiters. Attach them to previous row expression.
+            if rows and line.strip():
+                rows[-1]["expression"] = (rows[-1]["expression"] + "\n" + line.rstrip()).strip()
+            continue
+        rows.append({
+            "attribute": parts[0].strip(),
+            "flag": parts[1].strip(),
+            "name1": parts[2].strip(),
+            "name2": parts[3].strip(),
+            "expression": parts[4].strip(),
+        })
+    return rows
+
+
+def _normalize_sql_expr(expr: str) -> str:
+    """Normalize SQL expression for loose matching (case-insensitive, no spaces)."""
+    return re.sub(r"\s+", "", (expr or "").strip()).casefold()
+
+
+def _split_sql_projection_list(text: str) -> list[str]:
+    """Split a SELECT projection list by commas outside parentheses/quotes."""
+    items: list[str] = []
+    current: list[str] = []
+    depth = 0
+    in_single = False
+
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "'":
+            in_single = not in_single
+            current.append(ch)
+            i += 1
+            continue
+        if not in_single:
+            if ch == "(":
+                depth += 1
+            elif ch == ")" and depth > 0:
+                depth -= 1
+            elif ch == "," and depth == 0:
+                items.append("".join(current).strip())
+                current = []
+                i += 1
+                continue
+        current.append(ch)
+        i += 1
+
+    tail = "".join(current).strip()
+    if tail:
+        items.append(tail)
+    return items
+
+
+def _lookup_select_aliases(accdb: Path, query_name: str) -> dict[str, str]:
+    """Return mapping expression -> alias for SELECT projection metadata."""
+    object_id = _lookup_query_object_id(accdb, query_name)
+    if object_id is None:
+        return {}
+    rows = _load_msysquery_rows(accdb, object_id)
+    aliases: dict[str, str] = {}
+    for row in rows:
+        if row.get("attribute") != "6":
+            continue
+        expr = (row.get("expression") or "").strip()
+        alias = (row.get("name1") or "").strip()
+        if expr and alias:
+            aliases[_normalize_sql_expr(expr)] = alias
+    return aliases
+
+
+def _apply_select_aliases_from_metadata(sql: str, aliases: dict[str, str]) -> str:
+    """Inject AS aliases into SELECT projection list when missing."""
+    if not aliases:
+        return sql
+
+    m = re.search(r"(?is)^\s*SELECT\s+(.*?)\s+FROM\b", sql)
+    if not m:
+        return sql
+
+    projection = m.group(1)
+    fields = _split_sql_projection_list(projection)
+    if not fields:
+        return sql
+
+    rewritten: list[str] = []
+    changed = False
+    for field in fields:
+        norm = _normalize_sql_expr(field)
+        alias = aliases.get(norm)
+        if alias and not re.search(r"\bAS\b", field, flags=re.IGNORECASE):
+            rewritten.append(f"{field} AS {alias}")
+            changed = True
+        else:
+            rewritten.append(field)
+
+    if not changed:
+        return sql
+
+    new_projection = ", ".join(rewritten)
+    return sql[:m.start(1)] + new_projection + sql[m.end(1):]
+
+
+def _reconstruct_action_query_sql(accdb: Path, query_name: str) -> str | None:
+    """Reconstruct UPDATE/DELETE/INSERT query text from MSysQueries metadata."""
+    object_id = _lookup_query_object_id(accdb, query_name)
+    if object_id is None:
+        return None
+
+    rows = _load_msysquery_rows(accdb, object_id)
+    if not rows:
+        return None
+
+    op_row = next((r for r in rows if r["attribute"] == "1"), None)
+    if not op_row:
+        return None
+    try:
+        op_flag = int(op_row["flag"])
+    except ValueError:
+        return None
+
+    table_row = next((r for r in rows if r["attribute"] == "5" and r["name1"]), None)
+    where_row = next((r for r in rows if r["attribute"] == "8" and r["expression"]), None)
+    where_clause = where_row["expression"] if where_row else ""
+
+    # Access action query flags in MSysQueries.Attribute=1 rows:
+    # 3=INSERT, 4=UPDATE, 5=DELETE
+    if op_flag == 4:
+        table = table_row["name1"] if table_row else op_row["name1"]
+        if not table:
+            return None
+        set_rows = [r for r in rows if r["attribute"] == "6" and r["name2"]]
+        if not set_rows:
+            return None
+        assignments = [f"[{r['name2']}] = {r['expression'] or 'NULL'}" for r in set_rows]
+        sql = f"UPDATE [{table}] SET " + ", ".join(assignments)
+        if where_clause:
+            sql += f" WHERE {where_clause}"
+        return sql
+
+    if op_flag == 5:
+        table = table_row["name1"] if table_row else op_row["name1"]
+        if not table:
+            return None
+        sql = f"DELETE FROM [{table}]"
+        if where_clause:
+            sql += f" WHERE {where_clause}"
+        return sql
+
+    if op_flag == 3:
+        table = op_row["name1"] or (table_row["name1"] if table_row else "")
+        if not table:
+            return None
+        value_rows = [r for r in rows if r["attribute"] == "6"]
+        if not value_rows:
+            return None
+        columns = [r["name2"] for r in value_rows if r["name2"]]
+        values = [r["expression"] or "NULL" for r in value_rows]
+        if columns and len(columns) == len(values):
+            cols_sql = ", ".join(f"[{c}]" for c in columns)
+            return f"INSERT INTO [{table}] ({cols_sql}) VALUES (" + ", ".join(values) + ")"
+        return f"INSERT INTO [{table}] VALUES (" + ", ".join(values) + ")"
+
+    return None
+
+
+def _format_alias_for_access(alias: str) -> str:
+    """Return alias token using Access-style brackets when needed."""
+    a = (alias or "").strip()
+    if not a:
+        return a
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", a):
+        return a
+    return f"[{a}]"
+
+
+def _reconstruct_select_query_sql(accdb: Path, query_name: str) -> str | None:
+    """Reconstruct SELECT query text (incl. GROUP BY/HAVING) from MSysQueries."""
+    object_id = _lookup_query_object_id(accdb, query_name)
+    if object_id is None:
+        return None
+
+    rows = _load_msysquery_rows(accdb, object_id)
+    if not rows:
+        return None
+
+    # If query is an action query, let action reconstruction handle it.
+    op_row = next((r for r in rows if r["attribute"] == "1"), None)
+    if op_row:
+        try:
+            if int(op_row.get("flag") or "0") in {3, 4, 5}:
+                return None
+        except ValueError:
+            pass
+
+    select_rows = [r for r in rows if r["attribute"] == "6" and r["expression"]]
+    from_rows = [r for r in rows if r["attribute"] == "5" and r["name1"]]
+    if not select_rows or not from_rows:
+        return None
+
+    projections: list[str] = []
+    for row in select_rows:
+        expr = row["expression"].strip()
+        alias = (row.get("name1") or "").strip()
+        if alias and _normalize_sql_expr(alias) != _normalize_sql_expr(expr):
+            projections.append(f"{expr} AS {_format_alias_for_access(alias)}")
+        else:
+            projections.append(expr)
+
+    tables = [row["name1"].strip() for row in from_rows if row["name1"].strip()]
+    where_clause = next((r["expression"].strip() for r in rows if r["attribute"] == "8" and r["expression"].strip()), "")
+    group_by_parts = [r["expression"].strip() for r in rows if r["attribute"] == "9" and r["expression"].strip()]
+    having_parts = [r["expression"].strip() for r in rows if r["attribute"] == "10" and r["expression"].strip()]
+
+    sql = "SELECT " + ", ".join(projections)
+    sql += " FROM " + ", ".join(tables)
+    if where_clause:
+        sql += " WHERE " + where_clause
+    if group_by_parts:
+        sql += " GROUP BY " + ", ".join(group_by_parts)
+    if having_parts:
+        sql += " HAVING " + " AND ".join(having_parts)
+    sql += ";"
+    return sql
+
+
+def _format_query_for_display(sql: str) -> str:
+    """Format query text to look closer to Access SQL view."""
+    s = (sql or "").strip()
+    if not s:
+        return s
+
+    # Keep brackets for multi-word names/aliases; remove for simple identifiers.
+    def _maybe_unbracket(match: re.Match[str]) -> str:
+        token = match.group(1)
+        if re.search(r"\s", token):
+            return f"[{token}]"
+        if re.fullmatch(r"[A-Za-z_À-ÖØ-öø-ÿ][A-Za-z0-9_À-ÖØ-öø-ÿ]*(\.[A-Za-z_À-ÖØ-öø-ÿ][A-Za-z0-9_À-ÖØ-öø-ÿ]*)*", token):
+            return token
+        return f"[{token}]"
+
+    s = re.sub(r"\[([^\[\]]+)\]", _maybe_unbracket, s)
+
+    upper = s.upper()
+    if upper.startswith("UPDATE "):
+        s = re.sub(r"\s+SET\s+", "\nSET\n  ", s, flags=re.IGNORECASE)
+        s = re.sub(r",\s*", ",\n  ", s)
+        s = re.sub(r"\s+WHERE\s+", "\nWHERE ", s, flags=re.IGNORECASE)
+        return s
+
+    if upper.startswith("DELETE FROM "):
+        s = re.sub(r"\s+WHERE\s+", "\nWHERE ", s, flags=re.IGNORECASE)
+        return s
+
+    if upper.startswith("INSERT INTO "):
+        s = re.sub(r"\s+VALUES\s*\(", "\nVALUES (\n  ", s, flags=re.IGNORECASE)
+        s = re.sub(r",\s*", ",\n  ", s)
+        if s.endswith(")"):
+            s = s[:-1] + "\n)"
+        return s
+
+    # SELECT and other query types.
+    for pattern, repl in (
+        (r"\s+FROM\s+", "\nFROM "),
+        (r"\s+WHERE\s+", "\nWHERE "),
+        (r"\s+GROUP\s+BY\s+", "\nGROUP BY "),
+        (r"\s+HAVING\s+", "\nHAVING "),
+        (r"\s+ORDER\s+BY\s+", "\nORDER BY "),
+        (r"\s+INNER\s+JOIN\s+", "\nINNER JOIN "),
+        (r"\s+LEFT\s+JOIN\s+", "\nLEFT JOIN "),
+        (r"\s+RIGHT\s+JOIN\s+", "\nRIGHT JOIN "),
+        (r"\s+FULL\s+JOIN\s+", "\nFULL JOIN "),
+        (r"\s+AND\s+", "\n  AND "),
+        (r"\s+OR\s+", "\n  OR "),
+    ):
+        s = re.sub(pattern, repl, s, flags=re.IGNORECASE)
+    return s
+
+
 def list_saved_queries(accdb: Path) -> list[str]:
     """Return saved query names for a database using mdbtools."""
     result = subprocess.run(
@@ -396,6 +726,14 @@ def list_saved_queries(accdb: Path) -> list[str]:
 
 def get_saved_query_sql(accdb: Path, query_name: str) -> str:
     """Return SQL text for one saved query using mdbtools."""
+    reconstructed = _reconstruct_action_query_sql(accdb, query_name)
+    if reconstructed:
+        return _format_query_for_display(reconstructed)
+
+    reconstructed_select = _reconstruct_select_query_sql(accdb, query_name)
+    if reconstructed_select:
+        return _format_query_for_display(reconstructed_select)
+
     result = subprocess.run(
         ["mdb-queries", str(accdb), query_name],
         stdout=subprocess.PIPE,
@@ -407,7 +745,9 @@ def get_saved_query_sql(accdb: Path, query_name: str) -> str:
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"Failed to extract query '{query_name}'")
-    return result.stdout.strip()
+    sql = result.stdout.strip()
+    sql = _apply_select_aliases_from_metadata(sql, _lookup_select_aliases(accdb, query_name))
+    return _format_query_for_display(sql)
 
 
 def export_queries(accdb: Path) -> Path:
