@@ -3,6 +3,7 @@
 access2sql_gui.py  –  customtkinter GUI frontend for access2sql
 """
 import sys
+import json
 import queue
 import threading
 from pathlib import Path
@@ -19,6 +20,24 @@ except ImportError:
 from access2sql import VERSION, find_access_files, export_db
 
 ctk.set_appearance_mode("system")
+
+_SETTINGS_FILE = Path.home() / ".access2sql_settings.json"
+
+
+def _load_settings() -> dict:
+    try:
+        return json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_settings(delta: dict) -> None:
+    try:
+        settings = _load_settings()
+        settings.update(delta)
+        _SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 ctk.set_default_color_theme("blue")
 
 
@@ -141,10 +160,12 @@ class App(_Root):
         ctk.CTkButton(btn_row, text="Browse folder…", command=self._browse_folder,
                       width=130, **kw).grid(row=0, column=1)
 
+        saved_fmt = _load_settings().get("query_fmt", "TXT").upper()
         self._fmt_seg = ctk.CTkSegmentedButton(
             btn_row, values=["TXT", "MD"], width=100, height=34,
+            command=lambda v: _save_settings({"query_fmt": v}),
         )
-        self._fmt_seg.set("TXT")
+        self._fmt_seg.set(saved_fmt if saved_fmt in ("TXT", "MD") else "TXT")
         self._fmt_seg.grid(row=0, column=3, padx=(0, 8))
 
         self._gen_btn = ctk.CTkButton(
