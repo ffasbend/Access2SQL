@@ -184,35 +184,6 @@ acts as a backup for the same instruction.
 
 ---
 
-## Session 6 — Drop zone hover colour + macOS DnD limitation (v1.2.1 → 1.2.5)
-
-### Request
-Change the drop zone colour when the mouse hovers over it.
-
-### What was implemented
-`<Enter>` / `<Leave>` bindings on the drop frame and label change `fg_color` and
-`border_color`. A `_drop_leave` guard checks the actual mouse position to avoid
-flickering when the cursor moves between the parent frame and the child label.
-
-### macOS limitation discovered
-Two things do not work on macOS with tkinter/customtkinter:
-
-| Scenario | Why |
-|---|---|
-| Mouse hover on an **inactive** window | macOS does not deliver `<Enter>`/`<Leave>` events to unfocused windows. Unfixable in tkinter. |
-| Drag visual feedback (`<<DragEnter>>`, `<<DragMotion>>`) | tkinterdnd2's underlying tkdnd Tcl extension does not reliably deliver these events on macOS for system-initiated drags (e.g. from Finder). Only `<<Drop>>` is guaranteed. |
-
-Both issues were investigated and confirmed through iteration (`update_idletasks()` →
-`self.update()` → still no effect). There is no workaround within tkinter.
-
-### Final state (v1.2.5)
-- Mouse hover colour change **kept** — works correctly when the window is already active.
-- DnD intermediate events (`<<DragEnter>>`, `<<DragMotion>>`, `<<DragLeave>>`) and
-  `_drag_highlight()` **removed** — dead code, events never fire on macOS Finder drag.
-- `<<Drop>>` binding retained — drop functionality works correctly on all platforms.
-
----
-
 ## Session 5 — Switch GUI to customtkinter (v1.2)
 
 ### Request
@@ -266,13 +237,120 @@ label sits on top and captures pointer events first.
 
 ---
 
+## Session 6 — Drop zone hover colour + macOS DnD limitation (v1.2.1 → 1.2.5)
+
+### Request
+Change the drop zone colour when the mouse hovers over it.
+
+### What was implemented
+`<Enter>` / `<Leave>` bindings on the drop frame and label change `fg_color` and
+`border_color`. A `_drop_leave` guard checks the actual mouse position to avoid
+flickering when the cursor moves between the parent frame and the child label.
+
+### macOS limitation discovered
+Two things do not work on macOS with tkinter/customtkinter:
+
+| Scenario | Why |
+|---|---|
+| Mouse hover on an **inactive** window | macOS does not deliver `<Enter>`/`<Leave>` events to unfocused windows. Unfixable in tkinter. |
+| Drag visual feedback (`<<DragEnter>>`, `<<DragMotion>>`) | tkinterdnd2's underlying tkdnd Tcl extension does not reliably deliver these events on macOS for system-initiated drags (e.g. from Finder). Only `<<Drop>>` is guaranteed. |
+
+Both issues were investigated and confirmed through iteration (`update_idletasks()` →
+`self.update()` → still no effect). There is no workaround within tkinter.
+
+### Final state (v1.2.5)
+- Mouse hover colour change **kept** — works correctly when the window is already active.
+- DnD intermediate events (`<<DragEnter>>`, `<<DragMotion>>`, `<<DragLeave>>`) and
+  `_drag_highlight()` **removed** — dead code, events never fire on macOS Finder drag.
+- `<<Drop>>` binding retained — drop functionality works correctly on all platforms.
+
+---
+
+## Session 7 — File list as drop target, drop zone removed (v1.2.6)
+
+### Request
+Remove the top drop zone; make the "Files queued" area itself accept drag-and-drop.
+Files should still be removable with the × button.
+
+### Design
+- Top `CTkFrame` drop zone removed entirely.
+- `CTkScrollableFrame` (file list) becomes the primary drop target.
+- **Empty state label** shown inside the scroll frame when no files are queued — it
+  displays the "drop here" hint and is itself a registered drop target. It disappears when
+  the first file is added and reappears after Clear all (managed in `_refresh()`).
+- Each file row and its name/path labels are registered as drop targets in
+  `_add_file_row()` so drops on existing items are also caught.
+- All drop registrations bind `<<Drop>>` only — `<<DragEnter>>`/`<<DragMotion>>` remain
+  absent (confirmed unreliable on macOS, see Session 6).
+- Grid row numbering shifted: file list → row 0, buttons → row 1, log → row 2 (weight=1).
+
+---
+
+## Session 8 — Window opens in foreground when launched from terminal (v1.2.7)
+
+### Request
+When launched from the terminal the app window opens behind other windows.
+
+### Fix
+Added `_come_to_front()` called via `self.after(100, ...)` in `__init__`:
+```python
+def _come_to_front(self) -> None:
+    self.lift()
+    self.attributes("-topmost", True)
+    self.focus_force()
+    self.after(200, lambda: self.attributes("-topmost", False))
+```
+`lift()` raises the window, `-topmost True` forces it above non-tkinter windows,
+`focus_force()` grabs keyboard focus. The `-topmost` flag is removed after 200 ms so the
+window behaves normally afterwards. The 100 ms initial delay ensures the window is fully
+drawn before the calls fire.
+
+---
+
+## Session 9 — Markdown output for query export + commit workflow (v1.3)
+
+### Request
+Add a toggle to choose between plain `.txt` and Markdown `.md` output for exported queries.
+Also: always propose a commit message after work is done (text only, never execute).
+
+### Implementation
+
+**`access2sql.py` — `export_queries(accdb, fmt="txt")`**
+Added `fmt` parameter (`"txt"` or `"md"`). Markdown output:
+- File extension `.md` instead of `.txt`
+- H1 title + source metadata at top
+- Each query becomes an `## QueryName` heading followed by a ` ```sql ` fenced code block
+- Plain TXT format unchanged
+
+**`access2sql.py` — `export_db(accdb, use_pyodbc, query_fmt="txt")`**
+Added `query_fmt` parameter, passed through to `export_queries()`.
+
+**`access2sql_gui.py`**
+Added `CTkSegmentedButton` with values `["TXT", "MD"]` to the button row (between Browse
+and Generate). The selected value is read at generate-time and forwarded to `export_db()`.
+
+### Commit workflow rule
+Added to `CLAUDE.md` and memory: after every piece of work, propose a commit message
+(text only — never run git commands).
+
+### Files changed
+| File | Change |
+|---|---|
+| `access2sql.py` | `export_queries` + `export_db` updated; VERSION `1.2.7` → `1.3` |
+| `access2sql_gui.py` | `CTkSegmentedButton` added to button row |
+| `CLAUDE.md` | Commit-proposal rule added |
+
+---
+
 ## File inventory
 
 | File | Purpose |
 |---|---|
 | `access2sql.py` | Core CLI logic — table export + query export |
-| `access2sql_gui.py` | GUI frontend (tkinter + tkinterdnd2) |
+| `access2sql_gui.py` | GUI frontend (customtkinter + tkinterdnd2) |
 | `build_mac.py` | macOS build script — stages mdbtools, runs PyInstaller |
 | `requirements.txt` | Core runtime dependency (pyodbc) |
-| `requirements_gui.txt` | GUI/build dependencies (tkinterdnd2, pyinstaller) |
+| `requirements_gui.txt` | GUI/build dependencies (customtkinter, tkinterdnd2, pyinstaller) |
 | `environment.yml` | Conda environment definition |
+| `CLAUDE.md` | Persistent instructions for Claude Code (logging, versioning, commits) |
+| `src/claude_dev_log.md` | This file — full session history |
