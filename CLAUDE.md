@@ -16,6 +16,13 @@ Each entry must include:
 Use the same heading/section style already in the file (H2 for session, H3 for subsections,
 tables and fenced code blocks for detail).
 
+## Commits
+After every piece of work is done, always propose a git commit message — text only, never
+run git commands to stage or commit.
+Format: one subject line (`TYPE: short description (vX.Y)`) + a blank line +
+a short bullet-point body explaining what changed and why.
+Types: `ADD` (new feature), `FIX` (bug fix), `REFACTOR`, `DOCS`, `CHORE`.
+
 ## Versioning
 The script uses a single `VERSION` constant in `access2sql.py`.
 - Patch fix (bug, typo, minor tweak) → increment last digit, e.g. `1.1` → `1.1.1`
