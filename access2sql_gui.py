@@ -18,7 +18,7 @@ except ImportError:
 
 from access2sql import VERSION, find_access_files, export_db
 
-ctk.set_appearance_mode("system")       # follows macOS dark / light mode
+ctk.set_appearance_mode("system")
 ctk.set_default_color_theme("blue")
 
 
@@ -33,7 +33,6 @@ class _QueueStream:
         pass
 
 
-# Combine CTk root with TkinterDnD when available
 if _HAS_DND:
     class _Root(ctk.CTk, TkinterDnD.DnDWrapper):
         def __init__(self):
@@ -47,8 +46,8 @@ class App(_Root):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"Access to SQLite  v{VERSION}")
-        self.minsize(700, 580)
-        self.geometry("800x680")
+        self.minsize(680, 500)
+        self.geometry("800x620")
 
         self._files: list[Path] = []
         self._file_frames: list[tuple[Path, ctk.CTkFrame]] = []
@@ -70,49 +69,12 @@ class App(_Root):
 
     def _build_ui(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=1)     # log area expands
+        self.grid_rowconfigure(2, weight=1)     # log area expands
         PAD = 16
 
-        # ── Drop zone ─────────────────────────────────────────────────────────
-        self._drop_frame = ctk.CTkFrame(
-            self, corner_radius=12,
-            fg_color=("gray88", "gray18"),
-            border_width=2, border_color=("gray72", "gray32"),
-        )
-        self._drop_frame.grid(row=0, column=0, padx=PAD, pady=(PAD, 8), sticky="ew")
-        self._drop_frame.grid_columnconfigure(0, weight=1)
-
-        drop_text = (
-            "Drop .accdb / .mdb files or folders here\n(or use the Browse buttons below)"
-            if _HAS_DND else
-            "Use the Browse buttons below to select files or a folder"
-        )
-        self._drop_label = ctk.CTkLabel(
-            self._drop_frame, text=drop_text,
-            font=ctk.CTkFont(size=14), pady=26, cursor="hand2",
-        )
-        self._drop_label.grid(row=0, column=0, padx=16, sticky="ew")
-
-        for w in (self._drop_frame, self._drop_label):
-            w.bind("<Button-1>", lambda _: self._browse_files())
-            w.bind("<Enter>", lambda _: self._drop_frame.configure(
-                fg_color=("gray80", "gray26"), border_color=("gray60", "gray45")))
-            w.bind("<Leave>", self._drop_leave)
-
-        if _HAS_DND:
-            _BLUE = ("#3a7ebf", "#3a7ebf")
-            _GREY = ("gray72", "gray32")
-            for w in (self._drop_frame, self._drop_label):
-                w.drop_target_register(DND_FILES)
-                w.dnd_bind("<<Drop>>",      self._on_drop)
-                w.dnd_bind("<<DragEnter>>",
-                           lambda _: self._drop_frame.configure(border_color=_BLUE))
-                w.dnd_bind("<<DragLeave>>",
-                           lambda _: self._drop_frame.configure(border_color=_GREY))
-
-        # ── File list ─────────────────────────────────────────────────────────
+        # ── File list (primary drop target) ──────────────────────────────────
         list_card = ctk.CTkFrame(self, corner_radius=10)
-        list_card.grid(row=1, column=0, padx=PAD, pady=(0, 8), sticky="ew")
+        list_card.grid(row=0, column=0, padx=PAD, pady=(PAD, 8), sticky="ew")
         list_card.grid_columnconfigure(0, weight=1)
 
         hdr = ctk.CTkFrame(list_card, fg_color="transparent")
@@ -132,23 +94,45 @@ class App(_Root):
         ).grid(row=0, column=1, sticky="e")
 
         self._scroll_frame = ctk.CTkScrollableFrame(
-            list_card, height=130, corner_radius=6,
+            list_card, height=200, corner_radius=6,
             fg_color=("gray82", "gray14"),
         )
         self._scroll_frame.grid(row=1, column=0, padx=8, pady=(0, 10), sticky="ew")
         self._scroll_frame.grid_columnconfigure(0, weight=1)
 
+        # Empty-state hint — shown when no files are queued, acts as visual drop hint
+        hint = (
+            "Drop .accdb / .mdb files or folders here\n(or use the Browse buttons below)"
+            if _HAS_DND else
+            "Use the Browse buttons below to select files or a folder"
+        )
+        self._empty_label = ctk.CTkLabel(
+            self._scroll_frame, text=hint,
+            font=ctk.CTkFont(size=13),
+            text_color=("gray55", "gray50"),
+            pady=50,
+        )
+        self._empty_label.pack(fill="x")
+
+        # Register drop targets — all visible surfaces of the file list area
+        if _HAS_DND:
+            for w in (list_card, hdr, self._list_header,
+                      self._scroll_frame, self._empty_label):
+                w.drop_target_register(DND_FILES)
+                w.dnd_bind("<<Drop>>", self._on_drop)
+            # Note: <<DragEnter>> / <<DragMotion>> are not delivered on macOS for
+            # Finder drags — only <<Drop>> is reliable (see dev log session 6).
+
         # ── Buttons ───────────────────────────────────────────────────────────
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.grid(row=2, column=0, padx=PAD, pady=(0, 8), sticky="ew")
-        btn_row.grid_columnconfigure(2, weight=1)   # spacer pushes Generate right
+        btn_row.grid(row=1, column=0, padx=PAD, pady=(0, 8), sticky="ew")
+        btn_row.grid_columnconfigure(2, weight=1)
 
         kw = dict(corner_radius=8, height=34)
         ctk.CTkButton(btn_row, text="Browse files…",  command=self._browse_files,
                       width=130, **kw).grid(row=0, column=0, padx=(0, 6))
         ctk.CTkButton(btn_row, text="Browse folder…", command=self._browse_folder,
                       width=130, **kw).grid(row=0, column=1)
-        # column 2 = spacer
         self._gen_btn = ctk.CTkButton(
             btn_row, text="Generate Output",
             command=self._generate, width=160, state="disabled", **kw,
@@ -157,7 +141,7 @@ class App(_Root):
 
         # ── Log ───────────────────────────────────────────────────────────────
         log_card = ctk.CTkFrame(self, corner_radius=10)
-        log_card.grid(row=3, column=0, padx=PAD, pady=(0, 8), sticky="nsew")
+        log_card.grid(row=2, column=0, padx=PAD, pady=(0, 8), sticky="nsew")
         log_card.grid_columnconfigure(0, weight=1)
         log_card.grid_rowconfigure(1, weight=1)
 
@@ -179,22 +163,11 @@ class App(_Root):
         ctk.CTkLabel(self, textvariable=self._status_var,
                      font=ctk.CTkFont(size=11),
                      text_color=("gray50", "gray55"),
-                     ).grid(row=4, column=0, padx=PAD, pady=(0, 10), sticky="w")
+                     ).grid(row=3, column=0, padx=PAD, pady=(0, 10), sticky="w")
 
     # ── file management ───────────────────────────────────────────────────────
 
-    def _drop_leave(self, event) -> None:
-        # Only restore when the cursor actually leaves the entire drop zone,
-        # not just moves from the frame onto the child label (or vice versa).
-        x = event.x_root - self._drop_frame.winfo_rootx()
-        y = event.y_root - self._drop_frame.winfo_rooty()
-        if not (0 <= x < self._drop_frame.winfo_width() and
-                0 <= y < self._drop_frame.winfo_height()):
-            self._drop_frame.configure(
-                fg_color=("gray88", "gray18"), border_color=("gray72", "gray32"))
-
     def _on_drop(self, event) -> None:
-        self._drop_frame.configure(border_color=("gray72", "gray32"))
         self._add_paths([Path(p) for p in self.tk.splitlist(event.data)])
 
     def _browse_files(self) -> None:
@@ -227,6 +200,8 @@ class App(_Root):
         self._refresh()
 
     def _add_file_row(self, db: Path) -> None:
+        self._empty_label.pack_forget()
+
         row = ctk.CTkFrame(
             self._scroll_frame, corner_radius=6,
             fg_color=("gray90", "gray22"),
@@ -234,16 +209,18 @@ class App(_Root):
         row.pack(fill="x", padx=2, pady=2)
         row.columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(
+        name_lbl = ctk.CTkLabel(
             row, text=db.name, anchor="w",
             font=ctk.CTkFont(size=12, weight="bold"),
-        ).grid(row=0, column=0, padx=(10, 8), pady=6)
+        )
+        name_lbl.grid(row=0, column=0, padx=(10, 8), pady=6)
 
-        ctk.CTkLabel(
+        path_lbl = ctk.CTkLabel(
             row, text=str(db.parent), anchor="w",
             font=ctk.CTkFont(size=10),
             text_color=("gray50", "gray55"),
-        ).grid(row=0, column=1, padx=4, sticky="ew")
+        )
+        path_lbl.grid(row=0, column=1, padx=4, sticky="ew")
 
         def _remove(db=db, row=row) -> None:
             self._files.remove(db)
@@ -258,6 +235,12 @@ class App(_Root):
             text_color=("gray40", "gray70"),
         ).grid(row=0, column=2, padx=(4, 6))
 
+        # Register this row and its labels so drops on existing items also work
+        if _HAS_DND:
+            for w in (row, name_lbl, path_lbl):
+                w.drop_target_register(DND_FILES)
+                w.dnd_bind("<<Drop>>", self._on_drop)
+
         self._file_frames.append((db, row))
 
     def _clear(self) -> None:
@@ -270,8 +253,9 @@ class App(_Root):
     def _refresh(self) -> None:
         n = len(self._files)
         self._list_header.configure(text=f"Files queued: {n}")
-        self._gen_btn.configure(
-            state="normal" if n and not self._busy else "disabled")
+        self._gen_btn.configure(state="normal" if n and not self._busy else "disabled")
+        if n == 0:
+            self._empty_label.pack(fill="x")
 
     # ── generate ──────────────────────────────────────────────────────────────
 

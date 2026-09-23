@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.2.1"
+VERSION = "1.2.6"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.

@@ -184,6 +184,35 @@ acts as a backup for the same instruction.
 
 ---
 
+## Session 6 — Drop zone hover colour + macOS DnD limitation (v1.2.1 → 1.2.5)
+
+### Request
+Change the drop zone colour when the mouse hovers over it.
+
+### What was implemented
+`<Enter>` / `<Leave>` bindings on the drop frame and label change `fg_color` and
+`border_color`. A `_drop_leave` guard checks the actual mouse position to avoid
+flickering when the cursor moves between the parent frame and the child label.
+
+### macOS limitation discovered
+Two things do not work on macOS with tkinter/customtkinter:
+
+| Scenario | Why |
+|---|---|
+| Mouse hover on an **inactive** window | macOS does not deliver `<Enter>`/`<Leave>` events to unfocused windows. Unfixable in tkinter. |
+| Drag visual feedback (`<<DragEnter>>`, `<<DragMotion>>`) | tkinterdnd2's underlying tkdnd Tcl extension does not reliably deliver these events on macOS for system-initiated drags (e.g. from Finder). Only `<<Drop>>` is guaranteed. |
+
+Both issues were investigated and confirmed through iteration (`update_idletasks()` →
+`self.update()` → still no effect). There is no workaround within tkinter.
+
+### Final state (v1.2.5)
+- Mouse hover colour change **kept** — works correctly when the window is already active.
+- DnD intermediate events (`<<DragEnter>>`, `<<DragMotion>>`, `<<DragLeave>>`) and
+  `_drag_highlight()` **removed** — dead code, events never fire on macOS Finder drag.
+- `<<Drop>>` binding retained — drop functionality works correctly on all platforms.
+
+---
+
 ## Session 5 — Switch GUI to customtkinter (v1.2)
 
 ### Request
