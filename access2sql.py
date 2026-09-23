@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -364,7 +364,33 @@ def try_pyodbc(accdb: Path):
 # Backend: mdbtools CLI (macOS / Linux)
 # ══════════════════════════════════════════════════════════════════════════════
 
+_MDB_TOOL_NAMES = frozenset({
+    "mdb-tables", "mdb-export", "mdb-schema",
+    "mdb-queries", "mdb-sql",   "mdb-prop",
+})
+
+
+def _mdb_binary(name: str) -> str:
+    """Return path to an mdbtools binary, preferring the copy bundled inside a PyInstaller app."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        candidate = Path(base) / "mdbtools" / "bin" / name
+        if candidate.exists():
+            return str(candidate)
+    return name
+
+
+def _mdb_binary_exists(name: str) -> bool:
+    """Return True if the named mdbtools binary is available (bundled or on PATH)."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base and (Path(base) / "mdbtools" / "bin" / name).exists():
+        return True
+    return shutil.which(name) is not None
+
+
 def _run(cmd: list[str], check=True) -> str:
+    if cmd and cmd[0] in _MDB_TOOL_NAMES:
+        cmd = [_mdb_binary(cmd[0]), *cmd[1:]]
     result = subprocess.run(cmd, capture_output=True, text=True,
                             encoding="utf-8", errors="replace")
     if check and result.returncode != 0:
@@ -373,15 +399,15 @@ def _run(cmd: list[str], check=True) -> str:
 
 
 def _mdbtools_available() -> bool:
-    return subprocess.run(["which", "mdb-tables"], capture_output=True).returncode == 0
+    return _mdb_binary_exists("mdb-tables")
 
 
 def _mdb_queries_available() -> bool:
-    return shutil.which("mdb-queries") is not None
+    return _mdb_binary_exists("mdb-queries")
 
 
 def _mdb_sql_available() -> bool:
-    return shutil.which("mdb-sql") is not None
+    return _mdb_binary_exists("mdb-sql")
 
 
 def _run_mdb_sql(accdb: Path, sql: str) -> str:
@@ -389,7 +415,7 @@ def _run_mdb_sql(accdb: Path, sql: str) -> str:
     if not _mdb_sql_available():
         return ""
     result = subprocess.run(
-        ["mdb-sql", "-P", "-H", "-F", "-d", "|", str(accdb)],
+        [_mdb_binary("mdb-sql"), "-P", "-H", "-F", "-d", "|", str(accdb)],
         input=sql + "\nquit\n",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -720,7 +746,7 @@ def _format_query_for_display(sql: str) -> str:
 def list_saved_queries(accdb: Path) -> list[str]:
     """Return saved query names for a database using mdbtools."""
     result = subprocess.run(
-        ["mdb-queries", "-L", "-1", str(accdb)],
+        [_mdb_binary("mdb-queries"), "-L", "-1", str(accdb)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -744,7 +770,7 @@ def get_saved_query_sql(accdb: Path, query_name: str) -> str:
         return _format_query_for_display(reconstructed_select)
 
     result = subprocess.run(
-        ["mdb-queries", str(accdb), query_name],
+        [_mdb_binary("mdb-queries"), str(accdb), query_name],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
