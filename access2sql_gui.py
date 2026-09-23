@@ -64,6 +64,13 @@ class App(_Root):
 
         self._build_ui()
         self._tick()
+        self.after(100, self._come_to_front)
+
+    def _come_to_front(self) -> None:
+        self.lift()
+        self.attributes("-topmost", True)
+        self.focus_force()
+        self.after(200, lambda: self.attributes("-topmost", False))
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
