@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.3.3"
+VERSION = "1.3.4"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -690,8 +690,24 @@ def _reconstruct_select_query_sql(accdb: Path, query_name: str) -> str | None:
     return sql
 
 
+def _replace_top_level(sql: str, pattern: str, repl: str) -> str:
+    """Apply a regex replacement only at parenthesis depth 0 (not inside subqueries)."""
+    result: list[str] = []
+    depth = 0
+    last_end = 0
+    for m in re.finditer(pattern, sql, flags=re.IGNORECASE):
+        chunk = sql[last_end:m.start()]
+        depth += chunk.count("(") - chunk.count(")")
+        result.append(chunk)
+        result.append(repl if depth == 0 else m.group())
+        last_end = m.end()
+    result.append(sql[last_end:])
+    return "".join(result)
+
+
 def _format_query_for_display(sql: str) -> str:
-    """Format query text to look closer to Access SQL view."""
+    """Format reconstructed query text with clause-per-line layout.
+    Only applies to queries built internally — mdb-queries output is left untouched."""
     s = (sql or "").strip()
     if not s:
         return s
@@ -725,21 +741,21 @@ def _format_query_for_display(sql: str) -> str:
             s = s[:-1] + "\n)"
         return s
 
-    # SELECT and other query types.
+    # SELECT: break at top-level clause keywords only — never inside subqueries.
     for pattern, repl in (
-        (r"\s+FROM\s+", "\nFROM "),
-        (r"\s+WHERE\s+", "\nWHERE "),
+        (r"\s+FROM\s+",       "\nFROM "),
+        (r"\s+WHERE\s+",      "\nWHERE "),
         (r"\s+GROUP\s+BY\s+", "\nGROUP BY "),
-        (r"\s+HAVING\s+", "\nHAVING "),
+        (r"\s+HAVING\s+",     "\nHAVING "),
         (r"\s+ORDER\s+BY\s+", "\nORDER BY "),
         (r"\s+INNER\s+JOIN\s+", "\nINNER JOIN "),
-        (r"\s+LEFT\s+JOIN\s+", "\nLEFT JOIN "),
+        (r"\s+LEFT\s+JOIN\s+",  "\nLEFT JOIN "),
         (r"\s+RIGHT\s+JOIN\s+", "\nRIGHT JOIN "),
-        (r"\s+FULL\s+JOIN\s+", "\nFULL JOIN "),
-        (r"\s+AND\s+", "\n  AND "),
-        (r"\s+OR\s+", "\n  OR "),
+        (r"\s+FULL\s+JOIN\s+",  "\nFULL JOIN "),
+        (r"\s+AND\s+",        "\n  AND "),
+        (r"\s+OR\s+",         "\n  OR "),
     ):
-        s = re.sub(pattern, repl, s, flags=re.IGNORECASE)
+        s = _replace_top_level(s, pattern, repl)
     return s
 
 
@@ -782,7 +798,7 @@ def get_saved_query_sql(accdb: Path, query_name: str) -> str:
         raise RuntimeError(result.stderr.strip() or f"Failed to extract query '{query_name}'")
     sql = result.stdout.strip()
     sql = _apply_select_aliases_from_metadata(sql, _lookup_select_aliases(accdb, query_name))
-    return _format_query_for_display(sql)
+    return sql  # already in Access-native format — do not reformat
 
 
 def export_queries(accdb: Path, fmt: str = "txt") -> Path:
