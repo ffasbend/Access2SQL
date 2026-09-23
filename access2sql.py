@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.3.4"
+VERSION = "1.3.5"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -1535,6 +1535,11 @@ def export_db(accdb: Path, use_pyodbc: bool, query_fmt: str = "txt") -> None:
     ]
 
     table_order = order_tables_by_dependencies(schema)
+
+    # Drop in reverse dependency order so FK constraints don't block the drops.
+    for table in reversed(table_order):
+        sql_lines.append(f"DROP TABLE IF EXISTS {quote_ident(table)};")
+    sql_lines.append("")
 
     for table in table_order:
         table_schema = schema[table]
