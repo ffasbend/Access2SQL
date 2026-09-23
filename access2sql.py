@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -789,7 +789,7 @@ def export_queries(accdb: Path, fmt: str = "txt") -> Path:
     """Extract all saved queries and write them to a .txt or .md file."""
     ext = "md" if fmt == "md" else "txt"
     output_path = unique_output_path(accdb.with_name(f"{accdb.stem}_queries.{ext}"))
-    query_names = list_saved_queries(accdb)
+    query_names = sorted(list_saved_queries(accdb))
 
     if fmt == "md":
         lines: list[str] = [
