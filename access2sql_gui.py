@@ -160,19 +160,24 @@ class App(_Root):
         ctk.CTkButton(btn_row, text="Browse folder…", command=self._browse_folder,
                       width=130, **kw).grid(row=0, column=1)
 
+        ctk.CTkLabel(btn_row, text="Save queries as:",
+                     font=ctk.CTkFont(size=12),
+                     text_color=("gray40", "gray65"),
+                     ).grid(row=0, column=3, padx=(0, 4))
+
         saved_fmt = _load_settings().get("query_fmt", "TXT").upper()
         self._fmt_seg = ctk.CTkSegmentedButton(
             btn_row, values=["TXT", "MD"], width=100, height=34,
             command=lambda v: _save_settings({"query_fmt": v}),
         )
         self._fmt_seg.set(saved_fmt if saved_fmt in ("TXT", "MD") else "TXT")
-        self._fmt_seg.grid(row=0, column=3, padx=(0, 8))
+        self._fmt_seg.grid(row=0, column=4, padx=(0, 8))
 
         self._gen_btn = ctk.CTkButton(
             btn_row, text="Generate Output",
             command=self._generate, width=160, state="disabled", **kw,
         )
-        self._gen_btn.grid(row=0, column=4)
+        self._gen_btn.grid(row=0, column=5)
 
         # ── Log ───────────────────────────────────────────────────────────────
         log_card = ctk.CTkFrame(self, corner_radius=10)
