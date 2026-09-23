@@ -606,7 +606,7 @@ def _format_alias_for_access(alias: str) -> str:
 
 
 def _reconstruct_select_query_sql(accdb: Path, query_name: str) -> str | None:
-    """Reconstruct SELECT query text (incl. GROUP BY/HAVING) from MSysQueries."""
+    """Reconstruct SELECT query text (incl. GROUP BY/HAVING/ORDER BY) from MSysQueries."""
     object_id = _lookup_query_object_id(accdb, query_name)
     if object_id is None:
         return None
@@ -629,6 +629,9 @@ def _reconstruct_select_query_sql(accdb: Path, query_name: str) -> str | None:
     if not select_rows or not from_rows:
         return None
 
+    # DISTINCT: attribute 3 with flag=2
+    is_distinct = any(r.get("flag") == "2" for r in rows if r["attribute"] == "3")
+
     projections: list[str] = []
     for row in select_rows:
         expr = row["expression"].strip()
@@ -642,8 +645,10 @@ def _reconstruct_select_query_sql(accdb: Path, query_name: str) -> str | None:
     where_clause = next((r["expression"].strip() for r in rows if r["attribute"] == "8" and r["expression"].strip()), "")
     group_by_parts = [r["expression"].strip() for r in rows if r["attribute"] == "9" and r["expression"].strip()]
     having_parts = [r["expression"].strip() for r in rows if r["attribute"] == "10" and r["expression"].strip()]
+    order_by_parts = [r["expression"].strip() for r in rows if r["attribute"] == "11" and r["expression"].strip()]
 
-    sql = "SELECT " + ", ".join(projections)
+    select_keyword = "SELECT DISTINCT" if is_distinct else "SELECT"
+    sql = select_keyword + " " + ", ".join(projections)
     sql += " FROM " + ", ".join(tables)
     if where_clause:
         sql += " WHERE " + where_clause
@@ -651,6 +656,8 @@ def _reconstruct_select_query_sql(accdb: Path, query_name: str) -> str | None:
         sql += " GROUP BY " + ", ".join(group_by_parts)
     if having_parts:
         sql += " HAVING " + " AND ".join(having_parts)
+    if order_by_parts:
+        sql += " ORDER BY " + ", ".join(order_by_parts)
     sql += ";"
     return sql
 
