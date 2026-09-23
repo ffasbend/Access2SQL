@@ -140,11 +140,18 @@ class App(_Root):
                       width=130, **kw).grid(row=0, column=0, padx=(0, 6))
         ctk.CTkButton(btn_row, text="Browse folder…", command=self._browse_folder,
                       width=130, **kw).grid(row=0, column=1)
+
+        self._fmt_seg = ctk.CTkSegmentedButton(
+            btn_row, values=["TXT", "MD"], width=100, height=34,
+        )
+        self._fmt_seg.set("TXT")
+        self._fmt_seg.grid(row=0, column=3, padx=(0, 8))
+
         self._gen_btn = ctk.CTkButton(
             btn_row, text="Generate Output",
             command=self._generate, width=160, state="disabled", **kw,
         )
-        self._gen_btn.grid(row=0, column=3)
+        self._gen_btn.grid(row=0, column=4)
 
         # ── Log ───────────────────────────────────────────────────────────────
         log_card = ctk.CTkFrame(self, corner_radius=10)
@@ -275,6 +282,7 @@ class App(_Root):
 
         files      = list(self._files)
         use_pyodbc = self._use_pyodbc
+        query_fmt  = self._fmt_seg.get().lower()   # "txt" or "md"
         q          = self._q
 
         def _worker() -> None:
@@ -282,7 +290,7 @@ class App(_Root):
             sys.stdout = sys.stderr = _QueueStream(q)
             try:
                 for db in files:
-                    export_db(db, use_pyodbc)
+                    export_db(db, use_pyodbc, query_fmt)
                 q.put("\nDone.\n")
             except Exception as exc:
                 q.put(f"\nERROR: {exc}\n")
