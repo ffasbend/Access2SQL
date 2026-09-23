@@ -184,6 +184,59 @@ acts as a backup for the same instruction.
 
 ---
 
+## Session 5 — Switch GUI to customtkinter (v1.2)
+
+### Request
+Replace the plain tkinter GUI with a nicer-looking alternative.
+
+### Options considered
+
+| Option | Pros | Cons |
+|---|---|---|
+| customtkinter | Modern look, dark/light mode, minimal new dep, still tkinter underneath so DnD still works | No native listbox widget |
+| ttkbootstrap | Bootstrap themes, still tkinter | Less macOS-native feel |
+| PyQt6 | Most polished, fully native | Full rewrite, heavy dep (~50 MB) |
+
+### Decision: customtkinter
+It is a thin layer on top of tkinter, so `tkinterdnd2` drag-and-drop keeps working via the
+same `_Root` mixin pattern. The app automatically follows the OS dark/light mode via
+`ctk.set_appearance_mode("system")`.
+
+### Key design changes from the old GUI
+
+- **File list** — replaced `tk.Listbox` with a `CTkScrollableFrame` containing individual
+  `CTkFrame` rows. Each row shows filename (bold) + parent path (grey) + an `×` remove
+  button. Cleaner than a listbox and avoids the colour-mismatch problem with dark mode.
+- **Drop zone** — `CTkFrame` with `corner_radius=12` and a `border_color` that turns blue
+  on drag-enter, giving clear visual feedback.
+- **Buttons** — `CTkButton` with `corner_radius=8`; secondary actions (Clear all, ×)
+  use `fg_color="transparent"` so they don't compete visually with the primary action.
+- **Log area** — `CTkTextbox` (replaces `tk.Text`); forced dark colours
+  `#1e1e1e` / `#d4d4d4` regardless of system theme since it is intentionally terminal-like.
+- **Layout** — main window uses `grid` with `grid_rowconfigure(3, weight=1)` so the log
+  area expands as the window is resized; everything else is fixed height.
+
+### DnD + customtkinter integration
+`TkinterDnD.DnDWrapper` is mixed into `ctk.CTk` via multiple inheritance:
+```python
+class _Root(ctk.CTk, TkinterDnD.DnDWrapper):
+    def __init__(self):
+        super().__init__()
+        self.TkdndVersion = TkinterDnD._require(self)
+```
+Both the drop frame and the label inside it are registered as drop targets, since the
+label sits on top and captures pointer events first.
+
+### Files changed
+| File | Change |
+|---|---|
+| `access2sql_gui.py` | Full rewrite using customtkinter |
+| `access2sql.py` | VERSION `"1.1"` → `"1.2"` |
+| `requirements_gui.txt` | Added `customtkinter>=5.2.0` |
+| `build_mac.py` | Added `--collect-all customtkinter` to PyInstaller command |
+
+---
+
 ## File inventory
 
 | File | Purpose |

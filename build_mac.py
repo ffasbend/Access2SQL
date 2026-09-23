@@ -153,6 +153,7 @@ def build() -> None:
         "--name", APP_NAME,
         "--windowed",           # no terminal window on macOS
         "--collect-all", "tkinterdnd2",
+        "--collect-all", "customtkinter",
         *add_binary,
         "access2sql_gui.py",
     ]
