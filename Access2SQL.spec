@@ -1,10 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = []
+datas = [('assets', 'assets')]
 binaries = [('build/mdb_staging/bin/mdb-export', 'mdbtools/bin'), ('build/mdb_staging/bin/mdb-prop', 'mdbtools/bin'), ('build/mdb_staging/bin/mdb-queries', 'mdbtools/bin'), ('build/mdb_staging/bin/mdb-schema', 'mdbtools/bin'), ('build/mdb_staging/bin/mdb-sql', 'mdbtools/bin'), ('build/mdb_staging/bin/mdb-tables', 'mdbtools/bin'), ('build/mdb_staging/lib/libglib-2.0.0.dylib', 'mdbtools/lib'), ('build/mdb_staging/lib/libintl.8.dylib', 'mdbtools/lib'), ('build/mdb_staging/lib/libmdb.3.dylib', 'mdbtools/lib'), ('build/mdb_staging/lib/libmdbsql.3.dylib', 'mdbtools/lib'), ('build/mdb_staging/lib/libpcre2-8.0.dylib', 'mdbtools/lib'), ('build/mdb_staging/lib/libreadline.8.dylib', 'mdbtools/lib')]
 hiddenimports = []
 tmp_ret = collect_all('tkinterdnd2')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
@@ -39,6 +41,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['assets/icon.icns'],
 )
 coll = COLLECT(
     exe,
@@ -52,6 +55,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='Access2SQL.app',
-    icon=None,
+    icon='assets/icon.icns',
     bundle_identifier=None,
 )
