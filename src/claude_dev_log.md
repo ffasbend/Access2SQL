@@ -354,3 +354,69 @@ Added to `CLAUDE.md` and memory: after every piece of work, propose a commit mes
 | `environment.yml` | Conda environment definition |
 | `CLAUDE.md` | Persistent instructions for Claude Code (logging, versioning, commits) |
 | `src/claude_dev_log.md` | This file — full session history |
+
+---
+
+## Session — Clickable GitHub link in macOS "Access2SQL > About" panel (v1.4.8 → 1.4.9)
+
+### Problem / request
+In the built app, the GitHub link shown under **Access2SQL > About** could not be clicked.
+
+### Investigation
+That menu item opens the native Cocoa About panel, not the custom CTk dialog. The link
+text there came from `NSHumanReadableCopyright` in `Info.plist`, which AppKit shows as
+plain text only. The PyObjC redirect (`_patch_cocoa_about`) evidently does not catch the
+item, so the native panel still appears.
+
+### Reasoning
+The standard About panel automatically loads `Contents/Resources/Credits.html` (or `.rtf`)
+and renders it with working hyperlinks. This fixes the link whether or not the menu
+redirect works and needs no runtime code.
+
+### Changes made
+| File | Change |
+|---|---|
+| `build_mac.py` | `_patch_info_plist()` now writes `Resources/Credits.html` with an `<a href>` to the repo and removes `NSHumanReadableCopyright` (so the URL isn't shown twice) |
+| `access2sql.py` | VERSION bump |
+
+### Version bump
+`1.4.8` → `1.4.9`
+
+---
+
+## Session — About menu actually opens custom dialog (v1.4.9 → 1.4.10)
+
+### Problem / request
+After rebuilding with `Credits.html`, **Access2SQL > About** still showed no GitHub link.
+
+### Investigation
+`Credits.html` was present in the bundle, so something was overriding it. In a test script,
+the About menu item was fired through `NSApp.performSelector_withObject_afterDelay_` with
+both candidate hooks registered:
+
+```
+'About Python' orderFrontStandardAboutPanel:
+HITS ['tkAboutDialog']
+```
+
+Tk 8.6 implements `orderFrontStandardAboutPanel:` itself. If a Tcl command named
+`tkAboutDialog` exists, Tk calls it. If not, Tk shows the native panel with its own
+"Tcl & Tk" credits string, which replaces `Credits.html`. Tk never calls
+`tk::mac::ShowAbout` from this menu item. Calling back into Tk synchronously from
+PyObjC also crashed Python (GIL fatal error), so the PyObjC redirect was fragile too.
+
+### Reasoning
+Registering `tkAboutDialog` is one line and uses Tk's own hook, with no PyObjC dependency.
+The About menu item now opens the custom CTk dialog, which already has the clickable
+GitHub button.
+
+### Changes made
+| File | Change |
+|---|---|
+| `access2sql_gui.py` | `_come_to_front()` registers `tkAboutDialog` → `_show_about`; removed `_patch_cocoa_about()` and the `tk::mac::ShowAbout` registration |
+| `build_mac.py` | Removed `Credits.html` writing, PyObjC prereq check and hidden imports |
+| `Access2SQL.spec` | `hiddenimports` back to `[]` |
+| `requirements_gui.txt` | Removed `pyobjc` |
+
+### Version bump
+`1.4.9` → `1.4.10`

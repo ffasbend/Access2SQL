@@ -185,7 +185,7 @@ def _patch_info_plist() -> None:
     plist["CFBundleVersion"]            = APP_VERSION
     with open(plist_path, "wb") as f:
         plistlib.dump(plist, f)
-    print(f"  Patched Info.plist  CFBundleShortVersionString → {APP_VERSION}")
+    print(f"  Patched Info.plist  version → {APP_VERSION}")
 
 
 if __name__ == "__main__":

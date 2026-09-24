@@ -7,6 +7,7 @@ import json
 import queue
 import platform
 import threading
+import webbrowser
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog
@@ -139,8 +140,19 @@ class App(_Root):
                      text="Backends: mdbtools (macOS/Linux)  ·  pyodbc (Windows)",
                      font=ctk.CTkFont(size=10),
                      text_color=("gray55", "gray55")).pack(pady=(2, 0))
+
+        ctk.CTkButton(
+            win, text="github.com/ffasbend/Access2SQL",
+            font=ctk.CTkFont(size=11, underline=True),
+            text_color=("#0066cc", "#4da6ff"),
+            fg_color="transparent",
+            hover_color=("gray88", "gray22"),
+            border_width=0, cursor="hand2",
+            command=lambda: webbrowser.open("https://github.com/ffasbend/Access2SQL"),
+        ).pack(pady=(10, 0))
+
         ctk.CTkButton(win, text="OK", width=90, corner_radius=8,
-                      command=win.destroy).pack(pady=20)
+                      command=win.destroy).pack(pady=(12, 20))
 
         win.update_idletasks()
         x = self.winfo_x() + (self.winfo_width()  - win.winfo_width())  // 2
@@ -186,8 +198,9 @@ class App(_Root):
 
     def _come_to_front(self) -> None:
         if platform.system() == "Darwin":
-            # Override Tk's built-in About handler (runs after full CTk init).
-            self.createcommand("tk::mac::ShowAbout", self._show_about)
+            # Tk 8.6's "About <App>" item calls the Tcl command tkAboutDialog
+            # when it exists, instead of showing the native Cocoa panel.
+            self.createcommand("tkAboutDialog", self._show_about)
         icon = _asset("icon.png")
         if icon.exists():
             try:
