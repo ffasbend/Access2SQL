@@ -5,8 +5,10 @@ access2sql_gui.py  –  customtkinter GUI frontend for access2sql
 import sys
 import json
 import queue
+import platform
 import threading
 from pathlib import Path
+import tkinter as tk
 from tkinter import filedialog
 
 import customtkinter as ctk
@@ -89,11 +91,103 @@ class App(_Root):
             self._use_pyodbc = False
             self._backend = "mdbtools"
 
+        self._setup_menu()
         self._build_ui()
         self._tick()
         self.after(100, self._come_to_front)
 
+    # ── menu ──────────────────────────────────────────────────────────────────
+
+    def _setup_menu(self) -> None:
+        menubar = tk.Menu(self)
+        self.configure(menu=menubar)
+        # On macOS a cascade labelled "Help" is intercepted by the system help
+        # framework; "About" in the app menu goes through NSApplicationDelegate
+        # and cannot be overridden from Python. Use "?" to stay out of the way.
+        label = "?" if platform.system() == "Darwin" else "Help"
+        menu = tk.Menu(menubar, tearoff=False)
+        menubar.add_cascade(label=label, menu=menu)
+        menu.add_command(label="About",      command=self._show_about)
+        menu.add_separator()
+        menu.add_command(label="How to use", command=self._show_help)
+
+    def _show_about(self) -> None:
+        win = ctk.CTkToplevel(self)
+        win.title("About")
+        win.resizable(False, False)
+        win.grab_set()
+        win.lift()
+
+        icon_path = _asset("icon.png")
+        if icon_path.exists():
+            try:
+                from PIL import Image
+                img = ctk.CTkImage(Image.open(icon_path), size=(72, 72))
+                ctk.CTkLabel(win, image=img, text="").pack(pady=(24, 8))
+            except Exception:
+                pass
+
+        ctk.CTkLabel(win, text="Access to SQLite",
+                     font=ctk.CTkFont(size=18, weight="bold")).pack()
+        ctk.CTkLabel(win, text=f"Version {VERSION}",
+                     font=ctk.CTkFont(size=13)).pack(pady=(4, 2))
+        ctk.CTkLabel(win,
+                     text="Converts MS Access .accdb / .mdb databases\nto SQLite-compatible SQL",
+                     font=ctk.CTkFont(size=11), justify="center",
+                     text_color=("gray45", "gray60")).pack(pady=(4, 2))
+        ctk.CTkLabel(win,
+                     text="Backends: mdbtools (macOS/Linux)  ·  pyodbc (Windows)",
+                     font=ctk.CTkFont(size=10),
+                     text_color=("gray55", "gray55")).pack(pady=(2, 0))
+        ctk.CTkButton(win, text="OK", width=90, corner_radius=8,
+                      command=win.destroy).pack(pady=20)
+
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width()  - win.winfo_width())  // 2
+        y = self.winfo_y() + (self.winfo_height() - win.winfo_height()) // 2
+        win.geometry(f"+{x}+{y}")
+
+    def _show_help(self) -> None:
+        win = ctk.CTkToplevel(self)
+        win.title("How to use")
+        win.geometry("480x360")
+        win.resizable(False, False)
+        win.grab_set()
+        win.lift()
+
+        box = ctk.CTkTextbox(win, wrap="word",
+                             font=ctk.CTkFont(family="Helvetica", size=12))
+        box.pack(fill="both", expand=True, padx=16, pady=(16, 8))
+        box.insert("1.0", (
+            "1.  Add files\n"
+            "    Drop .accdb or .mdb files (or a folder) onto the file list,\n"
+            "    or use Browse files / Browse folder.\n\n"
+            "2.  Choose query output format\n"
+            "    TXT — plain-text file, one section per query\n"
+            "    MD  — Markdown file, headings + SQL code blocks\n\n"
+            "3.  Click Generate Output\n"
+            "    For each database the tool produces:\n"
+            "    · <name>.sql              — CREATE TABLE + INSERT statements\n"
+            "    · <name>_queries.txt/.md  — saved Access queries\n\n"
+            "    Output is saved next to the source file. Existing files are\n"
+            "    never overwritten — a numeric suffix (_1, _2 …) is added.\n\n"
+            "4.  Remove files from the queue\n"
+            "    Click × on a row, or use Clear all."
+        ))
+        box.configure(state="disabled")
+
+        ctk.CTkButton(win, text="OK", width=90, corner_radius=8,
+                      command=win.destroy).pack(pady=(0, 16))
+
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width()  - win.winfo_width())  // 2
+        y = self.winfo_y() + (self.winfo_height() - win.winfo_height()) // 2
+        win.geometry(f"+{x}+{y}")
+
     def _come_to_front(self) -> None:
+        if platform.system() == "Darwin":
+            # Override Tk's built-in About handler (runs after full CTk init).
+            self.createcommand("tk::mac::ShowAbout", self._show_about)
         icon = _asset("icon.png")
         if icon.exists():
             try:

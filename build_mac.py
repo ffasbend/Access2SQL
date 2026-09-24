@@ -17,9 +17,16 @@ Requirements (run once):
 import subprocess
 import sys
 import shutil
+import re
+import plistlib
 from pathlib import Path
 
 APP_NAME  = "Access2SQL"
+
+# Read version from access2sql.py without importing it (avoids dependency issues)
+_ver = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']',
+                 Path("access2sql.py").read_text(encoding="utf-8"), re.MULTILINE)
+APP_VERSION = _ver.group(1) if _ver else "1.0"
 STAGING   = Path("build") / "mdb_staging"
 MDB_TOOLS = [
     "mdb-tables", "mdb-export", "mdb-schema",
@@ -161,7 +168,24 @@ def build() -> None:
     ]
     subprocess.run(cmd, check=True)
 
+    _patch_info_plist()
+
     print(f"\nDone!  Open with:  open dist/{APP_NAME}.app")
+
+
+def _patch_info_plist() -> None:
+    """Set the bundle version in Info.plist so macOS About shows the right version."""
+    plist_path = Path("dist") / f"{APP_NAME}.app" / "Contents" / "Info.plist"
+    if not plist_path.exists():
+        print("  Warning: Info.plist not found — version not patched")
+        return
+    with open(plist_path, "rb") as f:
+        plist = plistlib.load(f)
+    plist["CFBundleShortVersionString"] = APP_VERSION
+    plist["CFBundleVersion"]            = APP_VERSION
+    with open(plist_path, "wb") as f:
+        plistlib.dump(plist, f)
+    print(f"  Patched Info.plist  CFBundleShortVersionString → {APP_VERSION}")
 
 
 if __name__ == "__main__":
