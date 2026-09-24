@@ -1,0 +1,297 @@
+name: Build and Release Access2SQL
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. 1.4.11"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  version:
+    name: Determine version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            TAG="${GITHUB_REF_NAME}"
+          else
+            VERSION="${{ inputs.version }}"
+            TAG="manual-${VERSION}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Building Access2SQL ${VERSION}"
+
+  build-macos:
+    name: macOS (${{ matrix.arch }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x86_64
+            runner: macos-15-intel
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set application version
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os, re
+          from pathlib import Path
+          p = Path("access2sql.py")
+          s = p.read_text(encoding="utf-8")
+          v = os.environ["APP_VERSION"]
+          s, n = re.subn(r'(?m)^VERSION\s*=\s*["\'][^"\']+["\']',
+                         f'VERSION = "{v}"', s, count=1)
+          if n != 1:
+              raise SystemExit("Could not update VERSION in access2sql.py")
+          p.write_text(s, encoding="utf-8")
+          PY
+
+      - name: Install mdbtools
+        run: brew install mdbtools
+
+      - name: Install Python build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_gui.txt
+
+      - name: Build .app
+        run: python build_mac.py
+
+      - name: Create DMG
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          hdiutil create \
+            -volname "Access2SQL ${APP_VERSION}" \
+            -srcfolder "dist/Access2SQL.app" \
+            -ov \
+            -format UDZO \
+            "Access2SQL-${APP_VERSION}-macOS-${{ matrix.arch }}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Access2SQL-macOS-${{ matrix.arch }}
+          path: Access2SQL-*.dmg
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows x64
+    needs: version
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set application version
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        shell: python
+        run: |
+          import os, re
+          from pathlib import Path
+          p = Path("access2sql.py")
+          s = p.read_text(encoding="utf-8")
+          v = os.environ["APP_VERSION"]
+          s, n = re.subn(r'(?m)^VERSION\s*=\s*["\'][^"\']+["\']',
+                         f'VERSION = "{v}"', s, count=1)
+          if n != 1:
+              raise SystemExit("Could not update VERSION in access2sql.py")
+          p.write_text(s, encoding="utf-8")
+
+      - name: Install Python build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_gui.txt
+          python -m pip install pyodbc pillow
+
+      - name: Create Windows icon
+        shell: python
+        run: |
+          from PIL import Image
+          Image.open("assets/icon.png").save(
+              "assets/icon.ico",
+              sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)]
+          )
+
+      - name: Build application
+        run: |
+          pyinstaller --noconfirm --clean `
+            --name Access2SQL `
+            --windowed `
+            --collect-all tkinterdnd2 `
+            --collect-all customtkinter `
+            --add-data "assets;assets" `
+            --icon assets\icon.ico `
+            access2sql_gui.py
+
+      - name: Build Windows installer
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        shell: pwsh
+        run: |
+          & iscc.exe "/DAppVersion=$env:APP_VERSION" "installer\Access2SQL.iss"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Access2SQL-Windows-x64
+          path: installer/output/*.exe
+          if-no-files-found: error
+
+  build-linux:
+    name: Linux x64
+    needs: version
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set application version
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os, re
+          from pathlib import Path
+          p = Path("access2sql.py")
+          s = p.read_text(encoding="utf-8")
+          v = os.environ["APP_VERSION"]
+          s, n = re.subn(r'(?m)^VERSION\s*=\s*["\'][^"\']+["\']',
+                         f'VERSION = "{v}"', s, count=1)
+          if n != 1:
+              raise SystemExit("Could not update VERSION in access2sql.py")
+          p.write_text(s, encoding="utf-8")
+          PY
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mdbtools dpkg-dev
+
+      - name: Install Python build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_gui.txt
+
+      - name: Build application
+        run: |
+          pyinstaller --noconfirm --clean \
+            --name Access2SQL \
+            --collect-all tkinterdnd2 \
+            --collect-all customtkinter \
+            --add-data "assets:assets" \
+            access2sql_gui.py
+
+      - name: Build Debian package
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          PKG="access2sql_${APP_VERSION}_amd64"
+          mkdir -p "$PKG/DEBIAN"
+          mkdir -p "$PKG/opt/access2sql"
+          mkdir -p "$PKG/usr/share/applications"
+          mkdir -p "$PKG/usr/share/icons/hicolor/256x256/apps"
+
+          cp -a dist/Access2SQL/. "$PKG/opt/access2sql/"
+          cp assets/icon.png "$PKG/usr/share/icons/hicolor/256x256/apps/access2sql.png"
+
+          cat > "$PKG/usr/share/applications/access2sql.desktop" <<EOF
+          [Desktop Entry]
+          Name=Access2SQL
+          Comment=Convert Microsoft Access databases to SQL/SQLite
+          Exec=/opt/access2sql/Access2SQL
+          Icon=access2sql
+          Terminal=false
+          Type=Application
+          Categories=Utility;Database;
+          EOF
+
+          cat > "$PKG/DEBIAN/control" <<EOF
+          Package: access2sql
+          Version: ${APP_VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Depends: mdbtools
+          Maintainer: ffasbend
+          Description: Access2SQL - Microsoft Access database converter
+           GUI application for converting Access databases to SQL/SQLite.
+          EOF
+
+          chmod 0755 "$PKG/DEBIAN"
+          chmod 0755 "$PKG/DEBIAN/control"
+          dpkg-deb --build "$PKG" \
+            "Access2SQL-${APP_VERSION}-Linux-amd64.deb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Access2SQL-Linux-amd64
+          path: Access2SQL-*.deb
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - version
+      - build-macos
+      - build-windows
+      - build-linux
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: Access2SQL-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh release create "$TAG" \
+            release-assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Access2SQL ${VERSION}" \
+            --generate-notes
