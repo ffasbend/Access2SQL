@@ -151,7 +151,9 @@ def build() -> None:
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean",
         "--name", APP_NAME,
-        "--windowed",           # no terminal window on macOS
+        "--windowed",
+        "--icon", "assets/icon.icns",
+        "--add-data", "assets:assets",
         "--collect-all", "tkinterdnd2",
         "--collect-all", "customtkinter",
         *add_binary,

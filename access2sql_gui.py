@@ -19,6 +19,14 @@ except ImportError:
 
 from access2sql import VERSION, find_access_files, export_db
 
+
+def _asset(filename: str) -> Path:
+    """Resolve an asset path for both script and PyInstaller bundle."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return Path(base) / "assets" / filename
+    return Path(__file__).parent / "assets" / filename
+
 ctk.set_appearance_mode("system")
 
 _SETTINGS_FILE = Path.home() / ".access2sql_settings.json"
@@ -86,6 +94,13 @@ class App(_Root):
         self.after(100, self._come_to_front)
 
     def _come_to_front(self) -> None:
+        icon = _asset("icon.png")
+        if icon.exists():
+            try:
+                import tkinter as tk
+                self.wm_iconphoto(True, tk.PhotoImage(file=str(icon)))
+            except Exception:
+                pass
         self.lift()
         self.attributes("-topmost", True)
         self.focus_force()
