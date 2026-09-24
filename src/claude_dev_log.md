@@ -420,3 +420,31 @@ GitHub button.
 
 ### Version bump
 `1.4.9` → `1.4.10`
+
+---
+
+## Session — App icon in About dialog (v1.4.10 → 1.4.11)
+
+### Problem / request
+Show `assets/icon.png` in the About dialog.
+
+### Investigation
+`_show_about()` already tried to load the icon through Pillow (`ctk.CTkImage`), but Pillow is
+not installed in `.venv` or bundled by PyInstaller. The `ImportError` was swallowed by
+`except Exception: pass`, so the icon never appeared.
+
+### Reasoning
+Tk 8.6 reads PNG itself, so `tk.PhotoImage` + `subsample(16)` (1254 px → 79 px) avoids adding
+Pillow as a dependency. A plain `tk.Label` is used because `CTkLabel` expects a `CTkImage`.
+Its `bg` is set to the dialog's current `fg_color` so it blends in with both light and dark mode.
+
+### Changes made
+| File | Change |
+|---|---|
+| `access2sql_gui.py` | `_show_about()` loads the icon with `tk.PhotoImage` instead of Pillow; keeps an image reference on the label |
+| `access2sql.py` | VERSION bump |
+
+Verified by opening the dialog in a script: one icon label, 79×79, bg `gray92` (light mode).
+
+### Version bump
+`1.4.10` → `1.4.11`

@@ -122,9 +122,12 @@ class App(_Root):
         icon_path = _asset("icon.png")
         if icon_path.exists():
             try:
-                from PIL import Image
-                img = ctk.CTkImage(Image.open(icon_path), size=(72, 72))
-                ctk.CTkLabel(win, image=img, text="").pack(pady=(24, 8))
+                # Tk reads PNG natively (no Pillow needed); 1254 px / 16 ≈ 78 px
+                img = tk.PhotoImage(file=str(icon_path)).subsample(16)
+                bg = win._apply_appearance_mode(win.cget("fg_color"))
+                lbl = tk.Label(win, image=img, bg=bg, borderwidth=0)
+                lbl.image = img  # keep a reference so it isn't garbage-collected
+                lbl.pack(pady=(24, 8))
             except Exception:
                 pass
 
