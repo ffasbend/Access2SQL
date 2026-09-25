@@ -169,6 +169,7 @@ def build() -> None:
     subprocess.run(cmd, check=True)
 
     _patch_info_plist()
+    _resign_app()
 
     print(f"\nDone!  Open with:  open dist/{APP_NAME}.app")
 
@@ -186,6 +187,15 @@ def _patch_info_plist() -> None:
     with open(plist_path, "wb") as f:
         plistlib.dump(plist, f)
     print(f"  Patched Info.plist  version → {APP_VERSION}")
+
+
+def _resign_app() -> None:
+    """Ad-hoc re-sign the bundle: editing Info.plist breaks PyInstaller's signature,
+    and Gatekeeper then reports a downloaded copy as "damaged"."""
+    app = Path("dist") / f"{APP_NAME}.app"
+    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
+    subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
+    print("  Re-signed app bundle (ad-hoc)")
 
 
 if __name__ == "__main__":

@@ -448,3 +448,51 @@ Verified by opening the dialog in a script: one icon label, 79×79, bg `gray92` 
 
 ### Version bump
 `1.4.10` → `1.4.11`
+
+---
+
+## Session — Release workflow errors + macOS DMG app won't start (v1.4.11 → 1.4.12)
+
+### Problem / request
+The GitHub Actions setup that builds a release when a tag is pushed reported errors, and the
+app inside the macOS DMG would not start.
+
+### Investigation
+Checked the `v1.4.11` runs through the public GitHub API:
+
+| Workflow | Result |
+|---|---|
+| `release.yml` "Build and Release Access2SQL" | success — release published with .dmg ×2, .deb, Setup.exe |
+| `build.yml` "Build Access2SQL" | **failure** in "Create GitHub Release" |
+
+Both workflows trigger on `v*` tags. `release.yml` created the release first, so
+`build.yml`'s `gh release create` failed because the release already existed.
+
+Downloaded `Access2SQL-1.4.11-macOS-arm64.dmg` and checked the app:
+
+```
+codesign --verify --deep --strict  →  invalid Info.plist (plist or signature have been modified)
+```
+
+PyInstaller ad-hoc signs the bundle, then `_patch_info_plist()` edits `Info.plist`, which breaks
+the signature. It still starts from a terminal, but a browser-downloaded (quarantined) copy is
+rejected by Gatekeeper as "damaged". Re-signing ad-hoc (`codesign --force --deep --sign -`)
+made the same bundle pass `--verify --deep --strict`.
+
+### Reasoning
+- `release.yml` does everything `build.yml` does, plus both Mac architectures and the
+  installers, so `build.yml` was removed instead of fixed.
+- Ad-hoc re-signing is free. Proper Developer ID signing + notarization needs a paid
+  Apple Developer account. Until then users must still approve the app once
+  (System Settings → Privacy & Security → Open Anyway), but it is no longer "damaged".
+
+### Changes made
+| File | Change |
+|---|---|
+| `.github/workflows/build.yml` | Deleted (duplicate trigger, failing release step) |
+| `build_mac.py` | New `_resign_app()` after `_patch_info_plist()`: ad-hoc `codesign --force --deep`, then `--verify --deep --strict` (build fails if invalid) |
+| `.github/workflows/release.yml` | DMG step stages the app + an `/Applications` symlink, checks the signature, then runs `hdiutil create -srcfolder dmg` |
+| `access2sql.py` | VERSION bump |
+
+### Version bump
+`1.4.11` → `1.4.12`

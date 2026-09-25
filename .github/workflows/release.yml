@@ -92,9 +92,13 @@ jobs:
         env:
           APP_VERSION: ${{ needs.version.outputs.version }}
         run: |
+          mkdir dmg
+          cp -R dist/Access2SQL.app dmg/
+          ln -s /Applications dmg/Applications
+          codesign --verify --deep --strict dmg/Access2SQL.app
           hdiutil create \
             -volname "Access2SQL ${APP_VERSION}" \
-            -srcfolder "dist/Access2SQL.app" \
+            -srcfolder dmg \
             -ov \
             -format UDZO \
             "Access2SQL-${APP_VERSION}-macOS-${{ matrix.arch }}.dmg"
