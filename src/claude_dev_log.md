@@ -574,3 +574,17 @@ Replaced the short macOS note in `readme.md` with a subsection
 | Right-click → Open | macOS 14 Sonoma and earlier |
 | `xattr -dr com.apple.quarantine /Applications/Access2SQL.app` | All versions; also fixes the "is damaged" message |
 Plus a short trust note pointing to `release.yml`. Documentation only, no version change.
+
+### Follow-up — Windows / Linux requirements in readme
+Added **"Windows: what you need"** and **"Linux: what you need"** sections after the macOS
+first-launch section, and linked all three from the Download table's Notes column.
+
+| Platform | Documented requirements |
+|---|---|
+| Windows | Access Database Engine 2016 x64 (link), `/quiet` workaround when 32-bit Office is installed, SmartScreen "More info → Run anyway" |
+| Linux | `apt install ./….deb` pulls in mdbtools (`.deb` `Depends: mdbtools`), `dpkg -i` + `apt -f install` alternative, amd64 / Ubuntu 24.04+ (built on `ubuntu-latest`, glibc), other distros → run from source |
+| macOS | Nothing extra (mdbtools bundled) |
+
+Found while checking the code: query export requires `mdb-queries` (`_mdb_queries_available()`),
+which the Windows build doesn't include, so on Windows only the SQL output is produced. The readme
+says so; the code is unchanged.

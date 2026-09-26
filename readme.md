@@ -21,10 +21,10 @@ Drop your databases onto the window, choose what to export, and click
 
 | Platform | File | Notes |
 |---|---|---|
-| macOS (Apple Silicon) | `Access2SQL-<version>-macOS-arm64.dmg` | Open the DMG and drag **Access2SQL** into **Applications** |
+| macOS (Apple Silicon) | `Access2SQL-<version>-macOS-arm64.dmg` | Nothing else to install. See [first launch](#macos-opening-the-app-the-first-time) |
 | macOS (Intel) | `Access2SQL-<version>-macOS-x86_64.dmg` | Same as above |
-| Windows 10/11 (64-bit) | `Access2SQL-<version>-Windows-x64-Setup.exe` | Needs the [Microsoft Access Database Engine](https://www.microsoft.com/en-us/download/details.aspx?id=54920) (ODBC driver) |
-| Linux (Debian/Ubuntu) | `Access2SQL-<version>-Linux-amd64.deb` | `sudo apt install ./Access2SQL-<version>-Linux-amd64.deb` (installs `mdbtools` too) |
+| Windows 10/11 (64-bit) | `Access2SQL-<version>-Windows-x64-Setup.exe` | Needs the Microsoft Access Database Engine. See [Windows](#windows-what-you-need) |
+| Linux (Debian/Ubuntu, 64-bit) | `Access2SQL-<version>-Linux-amd64.deb` | Needs mdbtools, installed automatically by `apt`. See [Linux](#linux-what-you-need) |
 
 All releases: <https://github.com/ffasbend/Access2SQL/releases>
 
@@ -60,6 +60,59 @@ Then start the app normally.
 
 > Only do this for apps you trust. Access2SQL is open source: the builds are
 > made from this repository by [GitHub Actions](.github/workflows/release.yml).
+
+Everything else the Mac app needs (Python, Tk, mdbtools) is bundled, so nothing
+else has to be installed.
+
+### Windows: what you need
+
+The Windows app reads Access files through Microsoft's own ODBC driver, which isn't
+part of Windows.
+
+1. **Install the Microsoft Access Database Engine 2016 Redistributable (64-bit):**
+   <https://www.microsoft.com/en-us/download/details.aspx?id=54920>
+   - Choose **`accessdatabaseengine_X64.exe`**. Access2SQL is a 64-bit app, and the
+     32-bit driver won't be found.
+   - If a **32-bit Microsoft Office** is installed, the setup refuses to install the
+     64-bit engine. Install it from a Command Prompt instead:
+     ```bat
+     accessdatabaseengine_X64.exe /quiet
+     ```
+   - A full 64-bit Microsoft Access installation already includes the driver.
+2. **Run `Access2SQL-<version>-Windows-x64-Setup.exe`.** The installer isn't
+   code-signed, so Windows SmartScreen may show *"Windows protected your PC"*. Click
+   **More info → Run anyway**.
+
+> **Queries on Windows:** exporting saved queries (`.txt` / `.md`) uses `mdb-queries`
+> from [mdbtools](https://github.com/mdbtools/mdbtools), which the Windows app doesn't
+> include. On Windows, only the **SQL** output (tables + data) is produced, and the log
+> shows *"QUERY skipped"*. Use the Mac or Linux version to export queries.
+
+### Linux: what you need
+
+The Linux package uses [mdbtools](https://github.com/mdbtools/mdbtools) to read Access
+files. Python and Tk are bundled.
+
+1. Download `Access2SQL-<version>-Linux-amd64.deb`.
+2. Install it with `apt`. This also installs `mdbtools` from your distribution
+   automatically:
+   ```bash
+   sudo apt install ./Access2SQL-<version>-Linux-amd64.deb
+   ```
+   If you install with `dpkg -i` instead, get the missing dependency afterwards with
+   `sudo apt -f install` (or `sudo apt install mdbtools`).
+3. Start **Access2SQL** from the application menu, or run `/opt/access2sql/Access2SQL`.
+
+Requirements and notes:
+
+- **64-bit (x86_64) Debian-based distribution** such as Ubuntu, Debian or Linux Mint.
+  The package is built on Ubuntu 24.04, so it needs a similarly recent system
+  (Ubuntu 24.04+, Debian 13+). Older releases may lack the required glibc version.
+- **mdbtools** (with `mdb-queries`, needed for query export). The `mdbtools` package in
+  Ubuntu/Debian includes it. Package page: <https://packages.ubuntu.com/mdbtools>
+- Other distributions (Fedora, Arch, …): there is no package yet. Install `mdbtools`
+  with your package manager and run from source (see
+  [Running without the GUI](#running-without-the-gui-command-line-script)).
 
 ## Using the app
 
