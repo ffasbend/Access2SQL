@@ -529,3 +529,48 @@ none ticked → Generate disabled; old `query_fmt: "MD"` → SQL + MD ticked.
 
 ### Version bump
 `1.4.12` → `1.5`
+
+---
+
+## Session — readme.md rewritten around the app (no version change)
+
+### Problem / request
+Rewrite `readme.md` to focus on the app: what it does, a link to the GitHub Releases page,
+and at the end how to use the script without the GUI.
+
+### Investigation
+Compared the old readme with the code and found these errors:
+| Old readme | Actual behaviour |
+|---|---|
+| Produces `<name>.sqlite` | Only `.sql` (+ query files) is written |
+| Date/Time → `TEXT` | `DATETIME` (`_TYPE_MAP`) |
+| Yes/No → `INTEGER` | `BOOLEAN` with values 0/1 |
+The release assets and install notes come from `release.yml` / `installer/Access2SQL.iss`.
+
+### Changes made
+| File | Change |
+|---|---|
+| `readme.md` | New structure: intro + output table → Download (link to `/releases/latest`, per-platform file table, Windows ODBC driver note, macOS "Open Anyway" note) → Using the app → type conversion table → backends → **Running without the GUI** (Conda/pip install, `python access2sql.py`, run GUI from source, link to `readme_build.md`) |
+
+### Version bump
+None — documentation only.
+
+### Follow-up — install instructions for the command-line script
+Added a **How to install** section under "Running without the GUI": `git clone`, then
+Option A (Conda, recommended) and Option B (pip + system packages, per-platform table),
+plus notes on tkinter and backend selection.
+
+While checking the backend note against `main()`: the command-line script falls back to
+mdbtools **only on macOS** (`if IS_MAC and _mdbtools_available()`). On Linux without pyodbc
+it exits, even though the GUI uses mdbtools there. The readme states the current
+behaviour; the code is unchanged (possible follow-up: allow the mdbtools fallback on Linux too).
+
+### Follow-up — Gatekeeper instructions for the unsigned Mac app
+Replaced the short macOS note in `readme.md` with a subsection
+**"macOS: opening the app the first time"** with three options:
+| Option | For |
+|---|---|
+| System Settings → Privacy & Security → Open Anyway | macOS 15 Sequoia+ (Control-click → Open no longer bypasses Gatekeeper there) |
+| Right-click → Open | macOS 14 Sonoma and earlier |
+| `xattr -dr com.apple.quarantine /Applications/Access2SQL.app` | All versions; also fixes the "is damaged" message |
+Plus a short trust note pointing to `release.yml`. Documentation only, no version change.
