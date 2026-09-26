@@ -496,3 +496,36 @@ made the same bundle pass `--verify --deep --strict`.
 
 ### Version bump
 `1.4.11` → `1.4.12`
+
+---
+
+## Session — Output checkboxes replace TXT/MD toggle (v1.4.12 → 1.5)
+
+### Problem / request
+Replace the TXT/MD segmented toggle with three checkboxes to choose what to save: SQL,
+queries as .txt, queries as .md.
+
+### Design
+- A separate **"Save:"** row between the file list and the buttons holds three `CTkCheckBox`es:
+  *SQL (tables + data)*, *Queries as .txt*, *Queries as .md*. They would not fit next to
+  the Browse/Generate buttons at the 680 px minimum window width.
+- The choice is stored in `~/.access2sql_settings.json` under `"outputs"`. An old
+  `"query_fmt"` value is carried over on first launch (SQL on, plus TXT or MD).
+- **Generate Output** is disabled when no box is ticked.
+- Core: `export_db(accdb, use_pyodbc, write_sql=True, query_fmts=("txt",))`. The table/data
+  export moved into `_export_sql()` and runs only when SQL is selected, so a queries-only run
+  doesn't read table data. `export_queries()` runs once per selected format. The CLI
+  (`main()`) keeps its old behaviour (SQL + TXT) through the defaults.
+
+### Changes made
+| File | Change |
+|---|---|
+| `access2sql.py` | `export_db` split into dispatcher + `_export_sql()`; new `write_sql` / `query_fmts` params |
+| `access2sql_gui.py` | Checkbox row (grid rows shifted: buttons 2, log 3, status 4); `_on_outputs_changed()` saves settings; `_refresh()` needs ≥1 output; `_generate()` passes the selection; How-to-use text updated |
+| `readme.md` | GUI section describes the checkboxes |
+
+Tested with stubbed exporters: queries-only → txt + md, no SQL; CLI defaults → SQL + txt;
+none ticked → Generate disabled; old `query_fmt: "MD"` → SQL + MD ticked.
+
+### Version bump
+`1.4.12` → `1.5`

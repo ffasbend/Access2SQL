@@ -177,13 +177,12 @@ class App(_Root):
             "1.  Add files\n"
             "    Drop .accdb or .mdb files (or a folder) onto the file list,\n"
             "    or use Browse files / Browse folder.\n\n"
-            "2.  Choose query output format\n"
-            "    TXT — plain-text file, one section per query\n"
-            "    MD  — Markdown file, headings + SQL code blocks\n\n"
+            "2.  Choose what to save (any combination)\n"
+            "    SQL            — <name>.sql, CREATE TABLE + INSERT statements\n"
+            "    Queries as .txt — <name>_queries.txt, one section per query\n"
+            "    Queries as .md  — <name>_queries.md, headings + SQL code blocks\n\n"
             "3.  Click Generate Output\n"
-            "    For each database the tool produces:\n"
-            "    · <name>.sql              — CREATE TABLE + INSERT statements\n"
-            "    · <name>_queries.txt/.md  — saved Access queries\n\n"
+            "    The selected files are produced for each database.\n\n"
             "    Output is saved next to the source file. Existing files are\n"
             "    never overwritten — a numeric suffix (_1, _2 …) is added.\n\n"
             "4.  Remove files from the queue\n"
@@ -220,7 +219,7 @@ class App(_Root):
 
     def _build_ui(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)     # log area expands
+        self.grid_rowconfigure(3, weight=1)     # log area expands
         PAD = 16
 
         # ── File list (primary drop target) ──────────────────────────────────
@@ -274,9 +273,37 @@ class App(_Root):
             # Note: <<DragEnter>> / <<DragMotion>> are not delivered on macOS for
             # Finder drags — only <<Drop>> is reliable (see dev log session 6).
 
+        # ── Output selection ──────────────────────────────────────────────────
+        out_row = ctk.CTkFrame(self, fg_color="transparent")
+        out_row.grid(row=1, column=0, padx=PAD, pady=(0, 8), sticky="ew")
+
+        ctk.CTkLabel(out_row, text="Save:",
+                     font=ctk.CTkFont(size=12),
+                     text_color=("gray40", "gray65"),
+                     ).pack(side="left", padx=(0, 10))
+
+        settings = _load_settings()
+        saved = settings.get("outputs")
+        if not isinstance(saved, dict):
+            # migrate the old single TXT/MD toggle
+            md = str(settings.get("query_fmt", "TXT")).upper() == "MD"
+            saved = {"sql": True, "txt": not md, "md": md}
+
+        self._out_vars: dict[str, ctk.BooleanVar] = {}
+        for key, text in (("sql", "SQL (tables + data)"),
+                          ("txt", "Queries as .txt"),
+                          ("md",  "Queries as .md")):
+            var = ctk.BooleanVar(value=bool(saved.get(key, key == "sql")))
+            self._out_vars[key] = var
+            ctk.CTkCheckBox(out_row, text=text, variable=var,
+                            command=self._on_outputs_changed,
+                            font=ctk.CTkFont(size=12),
+                            checkbox_width=20, checkbox_height=20,
+                            ).pack(side="left", padx=(0, 16))
+
         # ── Buttons ───────────────────────────────────────────────────────────
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.grid(row=1, column=0, padx=PAD, pady=(0, 8), sticky="ew")
+        btn_row.grid(row=2, column=0, padx=PAD, pady=(0, 8), sticky="ew")
         btn_row.grid_columnconfigure(2, weight=1)
 
         kw = dict(corner_radius=8, height=34)
@@ -285,28 +312,15 @@ class App(_Root):
         ctk.CTkButton(btn_row, text="Browse folder…", command=self._browse_folder,
                       width=130, **kw).grid(row=0, column=1)
 
-        ctk.CTkLabel(btn_row, text="Save queries as:",
-                     font=ctk.CTkFont(size=12),
-                     text_color=("gray40", "gray65"),
-                     ).grid(row=0, column=3, padx=(0, 4))
-
-        saved_fmt = _load_settings().get("query_fmt", "TXT").upper()
-        self._fmt_seg = ctk.CTkSegmentedButton(
-            btn_row, values=["TXT", "MD"], width=100, height=34,
-            command=lambda v: _save_settings({"query_fmt": v}),
-        )
-        self._fmt_seg.set(saved_fmt if saved_fmt in ("TXT", "MD") else "TXT")
-        self._fmt_seg.grid(row=0, column=4, padx=(0, 8))
-
         self._gen_btn = ctk.CTkButton(
             btn_row, text="Generate Output",
             command=self._generate, width=160, state="disabled", **kw,
         )
-        self._gen_btn.grid(row=0, column=5)
+        self._gen_btn.grid(row=0, column=3)
 
         # ── Log ───────────────────────────────────────────────────────────────
         log_card = ctk.CTkFrame(self, corner_radius=10)
-        log_card.grid(row=2, column=0, padx=PAD, pady=(0, 8), sticky="nsew")
+        log_card.grid(row=3, column=0, padx=PAD, pady=(0, 8), sticky="nsew")
         log_card.grid_columnconfigure(0, weight=1)
         log_card.grid_rowconfigure(1, weight=1)
 
@@ -328,7 +342,7 @@ class App(_Root):
         ctk.CTkLabel(self, textvariable=self._status_var,
                      font=ctk.CTkFont(size=11),
                      text_color=("gray50", "gray55"),
-                     ).grid(row=3, column=0, padx=PAD, pady=(0, 10), sticky="w")
+                     ).grid(row=4, column=0, padx=PAD, pady=(0, 10), sticky="w")
 
     # ── file management ───────────────────────────────────────────────────────
 
@@ -415,10 +429,16 @@ class App(_Root):
         self._file_frames.clear()
         self._refresh()
 
+    def _on_outputs_changed(self) -> None:
+        _save_settings({"outputs": {k: v.get() for k, v in self._out_vars.items()}})
+        self._refresh()
+
     def _refresh(self) -> None:
         n = len(self._files)
         self._list_header.configure(text=f"Files queued: {n}")
-        self._gen_btn.configure(state="normal" if n and not self._busy else "disabled")
+        any_output = any(v.get() for v in self._out_vars.values())
+        ready = n and any_output and not self._busy
+        self._gen_btn.configure(state="normal" if ready else "disabled")
         if n == 0:
             self._empty_label.pack(fill="x")
 
@@ -433,7 +453,8 @@ class App(_Root):
 
         files      = list(self._files)
         use_pyodbc = self._use_pyodbc
-        query_fmt  = self._fmt_seg.get().lower()   # "txt" or "md"
+        write_sql  = self._out_vars["sql"].get()
+        query_fmts = tuple(f for f in ("txt", "md") if self._out_vars[f].get())
         q          = self._q
 
         def _worker() -> None:
@@ -441,7 +462,7 @@ class App(_Root):
             sys.stdout = sys.stderr = _QueueStream(q)
             try:
                 for db in files:
-                    export_db(db, use_pyodbc, query_fmt)
+                    export_db(db, use_pyodbc, write_sql, query_fmts)
                 q.put("\nDone.\n")
             except Exception as exc:
                 q.put(f"\nERROR: {exc}\n")

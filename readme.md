@@ -65,8 +65,9 @@ mdb-schema) if pyodbc is unavailable.
 ## GUI
 
 A graphical interface is available in `access2sql_gui.py`.  
-Drop `.accdb` / `.mdb` files or folders onto the window, choose TXT or MD output
-for the query export, and click **Generate Output**.
+Drop `.accdb` / `.mdb` files or folders onto the window, tick what to save
+(**SQL** tables + data, **Queries as .txt**, **Queries as .md** — any combination),
+and click **Generate Output**.
 
 Run it directly (no build needed):
 

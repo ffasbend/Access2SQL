@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.4.12"
+VERSION = "1.5"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -1511,12 +1511,32 @@ def order_tables_by_dependencies(schema: dict[str, dict[str, object]]) -> list[s
 # ══════════════════════════════════════════════════════════════════════════════
 # Per-database export
 
-def export_db(accdb: Path, use_pyodbc: bool, query_fmt: str = "txt") -> None:
+def export_db(accdb: Path, use_pyodbc: bool, write_sql: bool = True,
+              query_fmts: tuple[str, ...] = ("txt",)) -> None:
+    """Export *accdb*: the .sql file if *write_sql*, plus one queries file per
+    format in *query_fmts* ("txt" and/or "md")."""
+    print(f"\n  → Extracting: {accdb}")
+
+    if write_sql:
+        _export_sql(accdb, use_pyodbc)
+
+    if not query_fmts:
+        return
+    if not _mdb_queries_available():
+        print("    ! QUERY  skipped (mdb-queries not found)")
+        return
+    for fmt in query_fmts:
+        try:
+            query_path = export_queries(accdb, fmt)
+            print(f"    ✓ QUERY  → {query_path.relative_to(accdb.parent.parent) if accdb.parent.parent != accdb.parent else query_path.name}")
+        except Exception as e:
+            print(f"    ! QUERY  export failed for {accdb.name}: {e}")
+
+
+def _export_sql(accdb: Path, use_pyodbc: bool) -> None:
     stem      = accdb.stem
     out_dir   = accdb.parent
     sql_path  = unique_output_path(out_dir / f"{stem}.sql")
-
-    print(f"\n  → Extracting: {accdb}")
 
     try:
         if use_pyodbc:
@@ -1561,15 +1581,6 @@ def export_db(accdb: Path, use_pyodbc: bool, query_fmt: str = "txt") -> None:
 
     sql_path.write_text("\n".join(sql_lines), encoding="utf-8")
     print(f"    ✓ SQL    → {sql_path.relative_to(accdb.parent.parent) if accdb.parent.parent != accdb.parent else sql_path.name}")
-
-    if _mdb_queries_available():
-        try:
-            query_path = export_queries(accdb, query_fmt)
-            print(f"    ✓ QUERY  → {query_path.relative_to(accdb.parent.parent) if accdb.parent.parent != accdb.parent else query_path.name}")
-        except Exception as e:
-            print(f"    ! QUERY  export failed for {accdb.name}: {e}")
-    else:
-        print("    ! QUERY  skipped (mdb-queries not found)")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
