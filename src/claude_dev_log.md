@@ -690,3 +690,14 @@ the terminal lacks macOS screen-capture permission.
 
 ### Version bump
 `1.5.1` → `1.5.2`
+
+---
+
+## Session — CLAUDE.md: run unit tests after every code change (no version change)
+
+### Changes made
+| File | Change |
+|---|---|
+| `CLAUDE.md` | New **Unit tests** section: run `python -m unittest discover -s tests -v` after every change to `access2sql.py`, `access2sql_gui.py` or `tests/`; all must pass before reporting done; skipped ≠ passed; record the result in the dev log |
+
+First run under the new rule (after the v1.5.2 "Clear all" change): 16 tests, OK.

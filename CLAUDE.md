@@ -16,6 +16,17 @@ Each entry must include:
 Use the same heading/section style already in the file (H2 for session, H3 for subsections,
 tables and fenced code blocks for detail).
 
+## Unit tests
+Run the unit tests every time the code is modified (`access2sql.py`, `access2sql_gui.py`
+or anything under `tests/`), from the project root:
+
+    python -m unittest discover -s tests -v
+
+- All tests must pass before the work is reported as done; report failures with their output.
+- If the tests were skipped (mdbtools missing), say so — skipped is not passed.
+- Mention the test result (e.g. "16 tests, OK") in the dev log entry.
+- See `readme_testing.md` for details and how to add `TEST*` queries.
+
 ## Commits
 After every piece of work is done, always propose a git commit message — text only, never
 run git commands to stage or commit.
