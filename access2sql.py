@@ -27,6 +27,8 @@ On macOS it falls back to the `mdbtools` CLI utilities (mdb-tables, mdb-export,
 mdb-schema) if pyodbc is unavailable.
 """
 
+import csv
+import io
 import os
 import sys
 import platform
@@ -41,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.5"
+VERSION = "1.5.1"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -429,47 +431,60 @@ def _run_mdb_sql(accdb: Path, sql: str) -> str:
     return result.stdout.strip()
 
 
+_SYSTABLE_CACHE: dict[tuple[str, int, str], list[dict[str, str]]] = {}
+
+
+def _export_system_table(accdb: Path, table: str) -> list[dict[str, str]]:
+    """Return all rows of a system table via mdb-export (cached per file version).
+    Unlike mdb-sql, mdb-export keeps multi-line text and whitespace byte-exact."""
+    try:
+        key = (str(accdb), accdb.stat().st_mtime_ns, table)
+    except OSError:
+        return []
+    if key not in _SYSTABLE_CACHE:
+        result = subprocess.run(
+            [_mdb_binary("mdb-export"), "-b", "strip", str(accdb), table],
+            capture_output=True, check=False,
+        )
+        if result.returncode != 0:
+            return []
+        text = result.stdout.decode("utf-8", errors="replace")
+        _SYSTABLE_CACHE[key] = list(csv.DictReader(io.StringIO(text, newline="")))
+    return _SYSTABLE_CACHE[key]
+
+
+def _lookup_query_object(accdb: Path, query_name: str) -> tuple[int, int] | None:
+    """Return (object id, object flags) from MSysObjects for a saved query name."""
+    for row in _export_system_table(accdb, "MSysObjects"):
+        if row.get("Name") == query_name and row.get("Type") == "5":
+            try:
+                return int(row["Id"]), int(row.get("Flags") or 0)
+            except ValueError:
+                return None
+    return None
+
+
 def _lookup_query_object_id(accdb: Path, query_name: str) -> int | None:
     """Return object id in MSysObjects for a saved query name."""
-    escaped = query_name.replace("'", "''")
-    out = _run_mdb_sql(accdb, f"select Id from MSysObjects where Name='{escaped}';")
-    if not out:
-        return None
-    first = out.splitlines()[0].strip()
-    try:
-        return int(first)
-    except ValueError:
-        return None
+    obj = _lookup_query_object(accdb, query_name)
+    return obj[0] if obj else None
 
 
 def _load_msysquery_rows(accdb: Path, object_id: int) -> list[dict[str, str]]:
-    """Load compact MSysQueries rows for one object id."""
-    out = _run_mdb_sql(
-        accdb,
-        (
-            "select Attribute,Flag,Name1,Name2,Expression "
-            f"from MSysQueries where ObjectId={object_id};"
-        ),
-    )
-    rows: list[dict[str, str]] = []
-    if not out:
-        return rows
-    for line in out.splitlines():
-        parts = line.split("|", 4)
-        if len(parts) < 5:
-            # Some Expression values are multiline; mdb-sql emits continuation
-            # lines without delimiters. Attach them to previous row expression.
-            if rows and line.strip():
-                rows[-1]["expression"] = (rows[-1]["expression"] + "\n" + line.rstrip()).strip()
-            continue
-        rows.append({
-            "attribute": parts[0].strip(),
-            "flag": parts[1].strip(),
-            "name1": parts[2].strip(),
-            "name2": parts[3].strip(),
-            "expression": parts[4].strip(),
-        })
-    return rows
+    """Load MSysQueries rows for one object id, in storage order.
+    Expressions are kept verbatim (only CRLF → LF)."""
+    oid = str(object_id)
+    return [
+        {
+            "attribute": (r.get("Attribute") or "").strip(),
+            "flag": (r.get("Flag") or "").strip(),
+            "name1": r.get("Name1") or "",
+            "name2": r.get("Name2") or "",
+            "expression": (r.get("Expression") or "").replace("\r\n", "\n"),
+        }
+        for r in _export_system_table(accdb, "MSysQueries")
+        if r.get("ObjectId") == oid
+    ]
 
 
 def _normalize_sql_expr(expr: str) -> str:
@@ -633,61 +648,167 @@ def _format_alias_for_access(alias: str) -> str:
     return f"[{a}]"
 
 
-def _reconstruct_select_query_sql(accdb: Path, query_name: str) -> str | None:
-    """Reconstruct SELECT query text (incl. GROUP BY/HAVING/ORDER BY) from MSysQueries."""
-    object_id = _lookup_query_object_id(accdb, query_name)
-    if object_id is None:
-        return None
+# MSysQueries attribute codes (same layout Access/Jackcess use)
+_QA_TYPE, _QA_PARAM, _QA_FLAG, _QA_TABLE, _QA_COLUMN = "1", "2", "3", "5", "6"
+_QA_JOIN, _QA_WHERE, _QA_GROUP, _QA_HAVING, _QA_ORDER = "7", "8", "9", "10", "11"
 
-    rows = _load_msysquery_rows(accdb, object_id)
+# Attribute 3 flag bits
+_QF_STAR, _QF_DISTINCT, _QF_OWNERACCESS = 1, 2, 4
+_QF_DISTINCTROW, _QF_TOP, _QF_PERCENT = 8, 16, 32
+
+_JOIN_TYPES = {"1": "INNER JOIN", "2": "LEFT JOIN", "3": "RIGHT JOIN"}
+
+_PARAM_TYPES = {
+    1: "Bit", 2: "Byte", 3: "Short", 4: "Long", 5: "Currency", 6: "IEEESingle",
+    7: "IEEEDouble", 8: "DateTime", 9: "Binary", 10: "Text", 11: "LongBinary",
+    12: "LongText", 15: "Guid", 16: "Decimal",
+}
+
+# MSysObjects.Flags for queries: 0 = SELECT, 80 = make-table (SELECT … INTO)
+_SELECT_OBJECT_FLAGS = {0, 80}
+
+
+def _access_name(name: str) -> str:
+    """Table/alias name as Access prints it: bare if a plain word, else [bracketed]."""
+    n = name.strip()
+    if re.fullmatch(r"\w+", n) or (n.startswith("[") and n.endswith("]")):
+        return n
+    return f"[{n}]"
+
+
+def _build_from_clause(table_rows: list[dict[str, str]], join_rows: list[dict[str, str]]) -> str:
+    """Build the FROM list: comma-separated tables, joined tables nested like Access does."""
+    def table_sql(row: dict[str, str]) -> str:
+        s = _access_name(row["name1"])
+        if row["expression"].strip():           # external database: tbl IN 'path'
+            s += f" IN '{row['expression'].strip()}'"
+        if row["name2"].strip():
+            s += " AS " + _access_name(row["name2"])
+        return s
+
+    # Joins reference tables by alias if one is set, otherwise by table name.
+    by_ref = {(r["name2"].strip() or r["name1"].strip()).casefold(): r for r in table_rows}
+
+    groups: list[tuple[set[str], str]] = []    # (table refs in this group, SQL text)
+
+    def group_of(ref: str) -> int | None:
+        return next((i for i, (refs, _) in enumerate(groups) if ref in refs), None)
+
+    def ref_sql(ref: str) -> str:
+        row = by_ref.get(ref)
+        return table_sql(row) if row else _access_name(ref)
+
+    for j in join_rows:
+        left, right = j["name1"].strip().casefold(), j["name2"].strip().casefold()
+        kind = _JOIN_TYPES.get(j["flag"], "INNER JOIN")
+        on = j["expression"]
+        gl, gr = group_of(left), group_of(right)
+        if gl is not None and gl == gr:
+            # Extra condition between tables that are already joined.
+            refs, text = groups[gl]
+            groups[gl] = (refs, f"{text} AND {on}")
+            continue
+        left_sql = f"({groups[gl][1]})" if gl is not None else ref_sql(left)
+        right_sql = f"({groups[gr][1]})" if gr is not None else ref_sql(right)
+        refs = ({left} if gl is None else groups[gl][0]) | ({right} if gr is None else groups[gr][0])
+        for idx in sorted({i for i in (gl, gr) if i is not None}, reverse=True):
+            groups.pop(idx)
+        groups.append((refs, f"{left_sql} {kind} {right_sql} ON {on}"))
+
+    parts: list[str] = []
+    emitted: set[int] = set()
+    for row in table_rows:
+        ref = (row["name2"].strip() or row["name1"].strip()).casefold()
+        gi = group_of(ref)
+        if gi is None:
+            parts.append(table_sql(row))
+        elif gi not in emitted:
+            emitted.add(gi)
+            parts.append(groups[gi][1])
+    return ", ".join(parts)
+
+
+def _reconstruct_select_query_sql(accdb: Path, query_name: str) -> str | None:
+    """Rebuild a SELECT (or make-table) query exactly the way Access's SQL view shows it.
+
+    Access stores no SQL text for these queries — only the parts in MSysQueries — and
+    regenerates the text on display: one clause per line, expressions verbatim.
+    """
+    obj = _lookup_query_object(accdb, query_name)
+    if obj is None or obj[1] not in _SELECT_OBJECT_FLAGS:
+        return None
+    rows = _load_msysquery_rows(accdb, obj[0])
     if not rows:
         return None
 
-    # If query is an action query, let action reconstruction handle it.
-    op_row = next((r for r in rows if r["attribute"] == "1"), None)
-    if op_row:
-        try:
-            if int(op_row.get("flag") or "0") in {3, 4, 5}:
-                return None
-        except ValueError:
-            pass
+    def of(attr: str) -> list[dict[str, str]]:
+        return [r for r in rows if r["attribute"] == attr]
 
-    select_rows = [r for r in rows if r["attribute"] == "6" and r["expression"]]
-    from_rows = [r for r in rows if r["attribute"] == "5" and r["name1"]]
-    if not select_rows or not from_rows:
+    flag_row = next(iter(of(_QA_FLAG)), None)
+    try:
+        flags = int(flag_row["flag"]) if flag_row else 0
+    except ValueError:
+        flags = 0
+
+    columns: list[str] = ["*"] if flags & _QF_STAR else []
+    for r in of(_QA_COLUMN):
+        expr, alias = r["expression"], r["name1"].strip()
+        columns.append(f"{expr} AS {_format_alias_for_access(alias)}" if alias else expr)
+    tables = of(_QA_TABLE)
+    if not columns or not tables:
         return None
 
-    # DISTINCT: attribute 3 with flag=2
-    is_distinct = any(r.get("flag") == "2" for r in rows if r["attribute"] == "3")
+    lines: list[str] = []
 
-    projections: list[str] = []
-    for row in select_rows:
-        expr = row["expression"].strip()
-        alias = (row.get("name1") or "").strip()
-        if alias and _normalize_sql_expr(alias) != _normalize_sql_expr(expr):
-            projections.append(f"{expr} AS {_format_alias_for_access(alias)}")
-        else:
-            projections.append(expr)
+    params = []
+    for r in of(_QA_PARAM):
+        try:
+            ptype = _PARAM_TYPES.get(int(r["flag"] or 0), "")
+        except ValueError:
+            ptype = ""
+        params.append(f"{r['name1']} {ptype}".rstrip())
+    if params:
+        lines.append("PARAMETERS " + ", ".join(params) + ";")
 
-    tables = [row["name1"].strip() for row in from_rows if row["name1"].strip()]
-    where_clause = next((r["expression"].strip() for r in rows if r["attribute"] == "8" and r["expression"].strip()), "")
-    group_by_parts = [r["expression"].strip() for r in rows if r["attribute"] == "9" and r["expression"].strip()]
-    having_parts = [r["expression"].strip() for r in rows if r["attribute"] == "10" and r["expression"].strip()]
-    order_by_parts = [r["expression"].strip() for r in rows if r["attribute"] == "11" and r["expression"].strip()]
+    select = "SELECT"
+    if flags & _QF_DISTINCT:
+        select += " DISTINCT"
+    elif flags & _QF_DISTINCTROW:
+        select += " DISTINCTROW"
+    if flags & _QF_TOP and flag_row and flag_row["name1"].strip():
+        select += f" TOP {flag_row['name1'].strip()}"
+        if flags & _QF_PERCENT:
+            select += " PERCENT"
+    select += " " + ", ".join(columns)
 
-    select_keyword = "SELECT DISTINCT" if is_distinct else "SELECT"
-    sql = select_keyword + " " + ", ".join(projections)
-    sql += " FROM " + ", ".join(tables)
-    if where_clause:
-        sql += " WHERE " + where_clause
-    if group_by_parts:
-        sql += " GROUP BY " + ", ".join(group_by_parts)
-    if having_parts:
-        sql += " HAVING " + " AND ".join(having_parts)
-    if order_by_parts:
-        sql += " ORDER BY " + ", ".join(order_by_parts)
-    sql += ";"
-    return sql
+    type_row = next(iter(of(_QA_TYPE)), None)
+    if obj[1] == 80 and type_row and type_row["name1"].strip():
+        select += " INTO " + _access_name(type_row["name1"])
+        if type_row["expression"].strip():
+            select += f" IN '{type_row['expression'].strip()}'"
+    lines.append(select)
+
+    lines.append("FROM " + _build_from_clause(tables, of(_QA_JOIN)))
+
+    where = next((r["expression"] for r in of(_QA_WHERE) if r["expression"]), "")
+    if where:
+        lines.append("WHERE " + where)
+    group_by = [r["expression"] for r in of(_QA_GROUP) if r["expression"]]
+    if group_by:
+        lines.append("GROUP BY " + ", ".join(group_by))
+    having = next((r["expression"] for r in of(_QA_HAVING) if r["expression"]), "")
+    if having:
+        lines.append("HAVING " + having)
+    order_by = [
+        r["expression"] + (" DESC" if r["name1"].strip().upper() == "D" else "")
+        for r in of(_QA_ORDER) if r["expression"]
+    ]
+    if order_by:
+        lines.append("ORDER BY " + ", ".join(order_by))
+    if flags & _QF_OWNERACCESS:
+        lines.append("WITH OWNERACCESS OPTION")
+
+    return "\n".join(lines) + ";"
 
 
 def _replace_top_level(sql: str, pattern: str, repl: str) -> str:
@@ -777,13 +898,14 @@ def list_saved_queries(accdb: Path) -> list[str]:
 
 def get_saved_query_sql(accdb: Path, query_name: str) -> str:
     """Return SQL text for one saved query using mdbtools."""
+    # SELECT queries are already built in Access's own layout — no reformatting.
+    reconstructed_select = _reconstruct_select_query_sql(accdb, query_name)
+    if reconstructed_select:
+        return reconstructed_select
+
     reconstructed = _reconstruct_action_query_sql(accdb, query_name)
     if reconstructed:
         return _format_query_for_display(reconstructed)
-
-    reconstructed_select = _reconstruct_select_query_sql(accdb, query_name)
-    if reconstructed_select:
-        return _format_query_for_display(reconstructed_select)
 
     result = subprocess.run(
         [_mdb_binary("mdb-queries"), str(accdb), query_name],

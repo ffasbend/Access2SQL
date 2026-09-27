@@ -588,3 +588,46 @@ first-launch section, and linked all three from the Download table's Notes colum
 Found while checking the code: query export requires `mdb-queries` (`_mdb_queries_available()`),
 which the Windows build doesn't include, so on Windows only the SQL output is produced. The readme
 says so; the code is unchanged.
+
+---
+
+## Session — Saved queries rebuilt exactly as Access shows them (v1.5 → 1.5.1)
+
+### Problem / request
+With `test_db01.accdb`, the exported query text did not match the Access SQL view:
+`TOP` missing, `AS` aliases missing, `SELECT *` printed as `SELECT  FROM`, and the
+spacing around `AND` changed.
+
+### Investigation
+Access stores **no SQL text** for SELECT queries. `MSysQueries` holds the parts, and
+the SQL view regenerates the text from them:
+
+| Attribute | Meaning | Example (test_db01) |
+|---|---|---|
+| 3 | Flag bits: 1 `*`, 2 DISTINCT, 4 OWNERACCESS, 8 DISTINCTROW, 16 TOP, 32 PERCENT; `Name1` = TOP value | `T21_top_all`: Flag 17, Name1 `2` → `SELECT TOP 2 *` |
+| 5 | Table (`Name1`), alias (`Name2`), external DB (`Expression`) | `T25_group_as`: `tblClients` / `C` |
+| 6 | Column expression, alias in `Name1` | |
+| 7 | Join: left/right ref, ON expression, Flag 1/2/3 = INNER/LEFT/RIGHT | |
+| 8 / 9 / 10 / 11 | WHERE / GROUP BY / HAVING / ORDER BY (`Name1`=`D` → DESC) | |
+| 2 | PARAMETERS (name, type code) | |
+
+Causes of the wrong output:
+1. The old rebuild ignored attribute 3 bits (TOP, `*`) and table aliases (`Name2`).
+   Queries with no column rows fell through to `mdb-queries` → `SELECT TOP 2  FROM [tblClients]`.
+2. `_format_query_for_display()` re-broke the rebuilt text at `AND`/`OR`, adding `"\n  AND "`.
+3. `_load_msysquery_rows()` read `mdb-sql` output split on `|` and `.strip()`ped it, losing whitespace.
+   `mdb-export` returns the expressions byte-exact, including `\r\n`.
+
+### Changes made
+| File | Change |
+|---|---|
+| `access2sql.py` | New `_export_system_table()` (mdb-export → csv, cached per file mtime); `_lookup_query_object()` returns (id, MSysObjects.Flags); `_load_msysquery_rows()` now verbatim (CRLF → LF only) |
+| `access2sql.py` | `_reconstruct_select_query_sql()` rewritten: PARAMETERS, DISTINCT/DISTINCTROW, TOP n [PERCENT], `*`, column aliases, `SELECT … INTO` (make-table, Flags 80), FROM with `AS` aliases, `IN 'db'` and nested joins (`_build_from_clause()`), WHERE/GROUP BY/HAVING/ORDER BY verbatim, OWNERACCESS; one clause per line, `;` at the end |
+| `access2sql.py` | `get_saved_query_sql()` tries SELECT first and returns it **without** `_format_query_for_display()`; action queries still use the old path |
+
+Verified: all 15 queries in `test_db01.accdb` print with TOP, AS and original spacing; full
+export of a copy still loads into sqlite3 (31 rows in tblClients); .txt and .md written.
+Not covered by the test DB: joins, PARAMETERS, ORDER BY, make-table and action queries.
+
+### Version bump
+`1.5` → `1.5.1`
