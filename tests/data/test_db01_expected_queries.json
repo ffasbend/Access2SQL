@@ -1,0 +1,14 @@
+{
+  "TEST_as": "SELECT *\nFROM tblClients AS C, tblFactures AS F\nWHERE C.idCLient = F.fiClient;",
+  "TEST_as_group_by": "SELECT fldNom, fldPrénom, COUNT(*) AS [Nombre de factures]\nFROM tblClients AS C, tblFactures AS F\nWHERE C.idCLient = F.fiClient\nGROUP BY fldNom, fldPrénom;",
+  "TEST_as_group_by_having": "SELECT fldNom, fldPrénom, COUNT(*) AS [Nombre de factures]\nFROM tblClients AS C, tblFactures AS F\nWHERE C.idCLient = F.fiClient\nGROUP BY fldNom, fldPrénom\nHAVING COUNT(*) > 3;",
+  "TEST_like": "SELECT *\nFROM tblClients\nWHERE fldNom LIKE '?e*';",
+  "TEST_like_and": "SELECT *\nFROM tblClients\nWHERE fldNom LIKE '?e*' \nAND fldLocalité = 'Luxembourg';",
+  "TEST_like_and_same_line": "SELECT *\nFROM tblClients\nWHERE fldNom LIKE '?e*' AND fldLocalité = 'Luxembourg';",
+  "TEST_like_and_with_spaces": "SELECT *\nFROM tblClients\nWHERE fldNom LIKE '?e*' \n  AND fldLocalité = 'Luxembourg';",
+  "TEST_order_by": "SELECT fldNom, fldPrénom\nFROM tblClients\nORDER BY fldNom DESC, fldPrénom;",
+  "TEST_order_by_asc_default": "SELECT fldNom, fldPrénom\nFROM tblClients\nORDER BY fldNom;",
+  "TEST_select_all": "SELECT *\nFROM tblClients;",
+  "TEST_top": "SELECT TOP 2 idClient, fldNom, fldPrénom\nFROM tblClients;",
+  "TEST_top_all": "SELECT TOP 2 *\nFROM tblClients;"
+}

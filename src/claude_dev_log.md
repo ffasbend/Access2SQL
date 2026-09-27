@@ -631,3 +631,42 @@ Not covered by the test DB: joins, PARAMETERS, ORDER BY, make-table and action q
 
 ### Version bump
 `1.5` → `1.5.1`
+
+---
+
+## Session — Unit tests for saved-query export (no version change)
+
+### Problem / request
+Create unit tests for the queries in the test Access file, move `test_db01.accdb` to a
+suitable place, and write `readme_testing.md` with instructions. Mid-task the user narrowed
+the scope: **only queries whose name starts with `TEST`**.
+
+### Investigation
+The database now holds 24 queries (the user added `TEST_*` cases; `T20/T21/T25` were renamed
+to `TEST_top`, `TEST_top_all`, `TEST_as`). Before storing them as expected results, all 12
+`TEST_*` outputs were checked by hand. `TEST_order_by` confirmed that DESC is stored as
+`Name1 = 'D'` in attribute 11, which had been inferred before.
+
+### Reasoning
+- **`unittest`** (standard library): no new dependency, and pytest can still run it.
+- **Expected texts in JSON**, not `.sql`/`.py`: `TEST_like_and` has a trailing space
+  before the line break, which editors strip.
+- **One generated test method per query**, so a failure names the query. Messages use `repr()`
+  so whitespace differences are visible.
+- **`TestQueryList`** makes the DB and JSON contain the same `TEST*` set, so a new query
+  can't be forgotten.
+- Export tests use a **temporary copy** because `export_queries()` writes next to the DB.
+- Tests are **skipped** (not failed) when mdbtools is missing (e.g. on Windows).
+
+### Changes made
+| File | Change |
+|---|---|
+| `test_db01.accdb` → `tests/data/test_db01.accdb` | Moved |
+| `tests/data/test_db01_expected_queries.json` | New — 12 expected SQL texts (`TEST_*`) |
+| `tests/test_queries.py` | New — `TestQueryList`, `TestSavedQuerySql` (12 tests), `TestExportQueriesFiles` (.txt, .md, no-overwrite) |
+| `readme_testing.md` | New — what is tested, requirements, how to run (unittest / pytest / single test), reading failures, adding a new `TEST*` query |
+
+Result: `python -m unittest discover -s tests -v` → 16 tests, OK.
+
+### Version bump
+None: `access2sql.py` unchanged (tests and docs only).
