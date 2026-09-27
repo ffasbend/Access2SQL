@@ -238,9 +238,8 @@ class App(_Root):
         self._list_header.grid(row=0, column=0, sticky="w")
 
         ctk.CTkButton(
-            hdr, text="Clear all", width=78, height=26, corner_radius=6,
-            fg_color="transparent", hover_color=("gray80", "gray30"),
-            text_color=("gray45", "gray65"), command=self._clear,
+            hdr, text="Clear all", width=100, height=34, corner_radius=8,
+            command=self._clear,
         ).grid(row=0, column=1, sticky="e")
 
         self._scroll_frame = ctk.CTkScrollableFrame(

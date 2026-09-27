@@ -670,3 +670,23 @@ Result: `python -m unittest discover -s tests -v` → 16 tests, OK.
 
 ### Version bump
 None: `access2sql.py` unchanged (tests and docs only).
+
+---
+
+## Session — "Clear all" styled like the other buttons (v1.5.1 → 1.5.2)
+
+### Problem / request
+Make the "Clear all" button look like the other GUI buttons.
+
+### Changes made
+| File | Change |
+|---|---|
+| `access2sql_gui.py` | "Clear all" button: removed transparent `fg_color` / grey `hover_color` / grey `text_color`; now `height=34`, `corner_radius=8` (theme default blue), `width=100` |
+| `access2sql.py` | VERSION bump |
+
+Checked by reading the widget settings: Clear all, Browse files… and Generate Output all have
+h=34, r=8, fg `#3B8ED0/#1F6AA5`, text `#DCE4EE`. A screenshot wasn't possible because
+the terminal lacks macOS screen-capture permission.
+
+### Version bump
+`1.5.1` → `1.5.2`
