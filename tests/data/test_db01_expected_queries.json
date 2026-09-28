@@ -12,5 +12,6 @@
   "TEST_order_by_asc_default": "SELECT fldNom, fldPrénom\nFROM tblClients\nORDER BY fldNom;",
   "TEST_select_all": "SELECT *\nFROM tblClients;",
   "TEST_top": "SELECT TOP 2 idClient, fldNom, fldPrénom\nFROM tblClients;",
-  "TEST_top_all": "SELECT TOP 2 *\nFROM tblClients;"
+  "TEST_top_all": "SELECT TOP 2 *\nFROM tblClients;",
+  "TEST_update": "UPDATE tblClients SET Libellé = 'Dryer9120', PrixUnitaire = 668\nWHERE idArticle = 22;"
 }

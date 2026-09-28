@@ -741,3 +741,33 @@ Not covered by a test query: UPDATE layout, INSERT … SELECT, INSERT with a col
 
 ### Version bump
 `1.5.2` → `1.5.3`
+
+---
+
+## Session — TEST_update added; old display formatter removed (v1.5.3 → 1.5.4)
+
+### Problem / request
+Also include the new `TEST_update` query in the unit tests.
+
+### Investigation
+`TEST_update`: MSysObjects.Flags 48, attr 1 flag 4, attr 5 `tblClients`, two attr 6 rows
+(`Name2` = column, `Expression` = new value), attr 8 WHERE. The old output was
+`UPDATE tblClients\nSET\n  Libellé = 'Dryer9120',\n  PrixUnitaire = 668\nWHERE idArticle = 22`
+(from `_format_query_for_display()`). The user confirmed the Access SQL view text:
+```
+UPDATE tblClients SET Libellé = 'Dryer9120', PrixUnitaire = 668
+WHERE idArticle = 22;
+```
+
+### Changes made
+| File | Change |
+|---|---|
+| `access2sql.py` | UPDATE branch: `UPDATE <from clause> SET col = expr, …` on one line, `WHERE` line, `;` (uses `_build_from_clause()` so joined UPDATEs work too) |
+| `access2sql.py` | Removed `_format_query_for_display()`, `_replace_top_level()` and the unused `table_row` variable, since all query types now build their own Access layout |
+| `tests/data/test_db01_expected_queries.json` | + `TEST_update` (15 queries) |
+| `readme_testing.md` | Test count 19; uncovered-cases list updated |
+
+Tests: 19 tests, OK.
+
+### Version bump
+`1.5.3` → `1.5.4`

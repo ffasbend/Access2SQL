@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.5.3"
+VERSION = "1.5.4"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -578,8 +578,7 @@ def _apply_select_aliases_from_metadata(sql: str, aliases: dict[str, str]) -> st
 def _reconstruct_action_query_sql(accdb: Path, query_name: str) -> str | None:
     """Reconstruct UPDATE/DELETE/INSERT query text from MSysQueries metadata.
 
-    DELETE and INSERT are built in Access's SQL-view layout (expressions verbatim,
-    trailing ';'). UPDATE still uses the generic display formatter.
+    Built in Access's SQL-view layout: expressions verbatim, trailing ';'.
     """
     object_id = _lookup_query_object_id(accdb, query_name)
     if object_id is None:
@@ -597,27 +596,26 @@ def _reconstruct_action_query_sql(accdb: Path, query_name: str) -> str | None:
     except ValueError:
         return None
 
-    table_row = next((r for r in rows if r["attribute"] == "5" and r["name1"]), None)
     where_row = next((r for r in rows if r["attribute"] == "8" and r["expression"]), None)
     where_clause = where_row["expression"] if where_row else ""
+
+    table_rows = [r for r in rows if r["attribute"] == _QA_TABLE and r["name1"].strip()]
+    join_rows = [r for r in rows if r["attribute"] == _QA_JOIN]
 
     # Access action query flags in MSysQueries.Attribute=1 rows:
     # 3=INSERT, 4=UPDATE, 5=DELETE
     if op_flag == 4:
-        table = table_row["name1"] if table_row else op_row["name1"]
-        if not table:
+        # UPDATE tbl SET col = expr, col2 = expr2
+        # WHERE expr;
+        set_rows = [r for r in rows if r["attribute"] == _QA_COLUMN and r["name2"].strip()]
+        if not table_rows or not set_rows:
             return None
-        set_rows = [r for r in rows if r["attribute"] == "6" and r["name2"]]
-        if not set_rows:
-            return None
-        assignments = [f"[{r['name2']}] = {r['expression'] or 'NULL'}" for r in set_rows]
-        sql = f"UPDATE [{table}] SET " + ", ".join(assignments)
+        assignments = [f"{_access_name(r['name2'])} = {r['expression'] or 'Null'}" for r in set_rows]
+        lines = ["UPDATE " + _build_from_clause(table_rows, join_rows)
+                 + " SET " + ", ".join(assignments)]
         if where_clause:
-            sql += f" WHERE {where_clause}"
-        return _format_query_for_display(sql)
-
-    table_rows = [r for r in rows if r["attribute"] == _QA_TABLE and r["name1"].strip()]
-    join_rows = [r for r in rows if r["attribute"] == _QA_JOIN]
+            lines.append("WHERE " + where_clause)
+        return "\n".join(lines) + ";"
 
     if op_flag == 5:
         # DELETE FROM tbl
@@ -825,75 +823,6 @@ def _reconstruct_select_query_sql(accdb: Path, query_name: str) -> str | None:
         lines.append("WITH OWNERACCESS OPTION")
 
     return "\n".join(lines) + ";"
-
-
-def _replace_top_level(sql: str, pattern: str, repl: str) -> str:
-    """Apply a regex replacement only at parenthesis depth 0 (not inside subqueries)."""
-    result: list[str] = []
-    depth = 0
-    last_end = 0
-    for m in re.finditer(pattern, sql, flags=re.IGNORECASE):
-        chunk = sql[last_end:m.start()]
-        depth += chunk.count("(") - chunk.count(")")
-        result.append(chunk)
-        result.append(repl if depth == 0 else m.group())
-        last_end = m.end()
-    result.append(sql[last_end:])
-    return "".join(result)
-
-
-def _format_query_for_display(sql: str) -> str:
-    """Format reconstructed query text with clause-per-line layout.
-    Only applies to queries built internally — mdb-queries output is left untouched."""
-    s = (sql or "").strip()
-    if not s:
-        return s
-
-    # Keep brackets for multi-word names/aliases; remove for simple identifiers.
-    def _maybe_unbracket(match: re.Match[str]) -> str:
-        token = match.group(1)
-        if re.search(r"\s", token):
-            return f"[{token}]"
-        if re.fullmatch(r"[A-Za-z_À-ÖØ-öø-ÿ][A-Za-z0-9_À-ÖØ-öø-ÿ]*(\.[A-Za-z_À-ÖØ-öø-ÿ][A-Za-z0-9_À-ÖØ-öø-ÿ]*)*", token):
-            return token
-        return f"[{token}]"
-
-    s = re.sub(r"\[([^\[\]]+)\]", _maybe_unbracket, s)
-
-    upper = s.upper()
-    if upper.startswith("UPDATE "):
-        s = re.sub(r"\s+SET\s+", "\nSET\n  ", s, flags=re.IGNORECASE)
-        s = re.sub(r",\s*", ",\n  ", s)
-        s = re.sub(r"\s+WHERE\s+", "\nWHERE ", s, flags=re.IGNORECASE)
-        return s
-
-    if upper.startswith("DELETE FROM "):
-        s = re.sub(r"\s+WHERE\s+", "\nWHERE ", s, flags=re.IGNORECASE)
-        return s
-
-    if upper.startswith("INSERT INTO "):
-        s = re.sub(r"\s+VALUES\s*\(", "\nVALUES (\n  ", s, flags=re.IGNORECASE)
-        s = re.sub(r",\s*", ",\n  ", s)
-        if s.endswith(")"):
-            s = s[:-1] + "\n)"
-        return s
-
-    # SELECT: break at top-level clause keywords only — never inside subqueries.
-    for pattern, repl in (
-        (r"\s+FROM\s+",       "\nFROM "),
-        (r"\s+WHERE\s+",      "\nWHERE "),
-        (r"\s+GROUP\s+BY\s+", "\nGROUP BY "),
-        (r"\s+HAVING\s+",     "\nHAVING "),
-        (r"\s+ORDER\s+BY\s+", "\nORDER BY "),
-        (r"\s+INNER\s+JOIN\s+", "\nINNER JOIN "),
-        (r"\s+LEFT\s+JOIN\s+",  "\nLEFT JOIN "),
-        (r"\s+RIGHT\s+JOIN\s+", "\nRIGHT JOIN "),
-        (r"\s+FULL\s+JOIN\s+",  "\nFULL JOIN "),
-        (r"\s+AND\s+",        "\n  AND "),
-        (r"\s+OR\s+",         "\n  OR "),
-    ):
-        s = _replace_top_level(s, pattern, repl)
-    return s
 
 
 def list_saved_queries(accdb: Path) -> list[str]:

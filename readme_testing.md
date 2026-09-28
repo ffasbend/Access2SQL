@@ -89,7 +89,7 @@ test_TEST_as (test_queries.TestSavedQuerySql.test_TEST_as)
 Query 'TEST_as' matches Access SQL view ... ok
 ...
 ----------------------------------------------------------------------
-Ran 18 tests in 0.11s
+Ran 19 tests in 0.12s
 
 OK
 ```
@@ -123,5 +123,6 @@ actual:   "SELECT *\nFROM tblClients\nWHERE fldNom LIKE '?e*'\n  AND fldLocalit�
 > Otherwise the test only confirms what the code already does.
 
 Good candidates that aren't covered yet: joins (`INNER` / `LEFT` / `RIGHT`), queries with
-`PARAMETERS`, `DISTINCTROW`, `TOP n PERCENT`, make-table (`SELECT … INTO`), `UPDATE`,
-`INSERT INTO … SELECT` (append from a table) and `DELETE` with a join.
+`PARAMETERS`, `DISTINCTROW`, `TOP n PERCENT`, make-table (`SELECT … INTO`),
+`INSERT INTO … SELECT` (append from a table), `INSERT` with a column list, and
+`UPDATE` / `DELETE` with a join.
