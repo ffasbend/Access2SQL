@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.5.2"
+VERSION = "1.5.3"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -576,7 +576,11 @@ def _apply_select_aliases_from_metadata(sql: str, aliases: dict[str, str]) -> st
 
 
 def _reconstruct_action_query_sql(accdb: Path, query_name: str) -> str | None:
-    """Reconstruct UPDATE/DELETE/INSERT query text from MSysQueries metadata."""
+    """Reconstruct UPDATE/DELETE/INSERT query text from MSysQueries metadata.
+
+    DELETE and INSERT are built in Access's SQL-view layout (expressions verbatim,
+    trailing ';'). UPDATE still uses the generic display formatter.
+    """
     object_id = _lookup_query_object_id(accdb, query_name)
     if object_id is None:
         return None
@@ -610,30 +614,42 @@ def _reconstruct_action_query_sql(accdb: Path, query_name: str) -> str | None:
         sql = f"UPDATE [{table}] SET " + ", ".join(assignments)
         if where_clause:
             sql += f" WHERE {where_clause}"
-        return sql
+        return _format_query_for_display(sql)
+
+    table_rows = [r for r in rows if r["attribute"] == _QA_TABLE and r["name1"].strip()]
+    join_rows = [r for r in rows if r["attribute"] == _QA_JOIN]
 
     if op_flag == 5:
-        table = table_row["name1"] if table_row else op_row["name1"]
-        if not table:
+        # DELETE FROM tbl
+        # WHERE expr;
+        if not table_rows:
             return None
-        sql = f"DELETE FROM [{table}]"
+        lines = ["DELETE FROM " + _build_from_clause(table_rows, join_rows)]
         if where_clause:
-            sql += f" WHERE {where_clause}"
-        return sql
+            lines.append("WHERE " + where_clause)
+        return "\n".join(lines) + ";"
 
     if op_flag == 3:
-        table = op_row["name1"] or (table_row["name1"] if table_row else "")
-        if not table:
+        # INSERT INTO tbl [(cols)]
+        # VALUES (v1, v2, …);          — or —  SELECT … FROM … (append from tables)
+        target = op_row["name1"].strip()
+        value_rows = [r for r in rows if r["attribute"] == _QA_COLUMN]
+        if not target or not value_rows:
             return None
-        value_rows = [r for r in rows if r["attribute"] == "6"]
-        if not value_rows:
-            return None
-        columns = [r["name2"] for r in value_rows if r["name2"]]
+        head = "INSERT INTO " + _access_name(target)
+        if op_row["expression"].strip():                # external target database
+            head += f" IN '{op_row['expression'].strip()}'"
+        columns = [r["name2"].strip() for r in value_rows]
+        if all(columns):
+            head += " (" + ", ".join(columns) + ")"
         values = [r["expression"] or "NULL" for r in value_rows]
-        if columns and len(columns) == len(values):
-            cols_sql = ", ".join(f"[{c}]" for c in columns)
-            return f"INSERT INTO [{table}] ({cols_sql}) VALUES (" + ", ".join(values) + ")"
-        return f"INSERT INTO [{table}] VALUES (" + ", ".join(values) + ")"
+        if not table_rows:
+            return head + "\nVALUES (" + ", ".join(values) + ");"
+        lines = [head, "SELECT " + ", ".join(values),
+                 "FROM " + _build_from_clause(table_rows, join_rows)]
+        if where_clause:
+            lines.append("WHERE " + where_clause)
+        return "\n".join(lines) + ";"
 
     return None
 
@@ -905,7 +921,7 @@ def get_saved_query_sql(accdb: Path, query_name: str) -> str:
 
     reconstructed = _reconstruct_action_query_sql(accdb, query_name)
     if reconstructed:
-        return _format_query_for_display(reconstructed)
+        return reconstructed
 
     result = subprocess.run(
         [_mdb_binary("mdb-queries"), str(accdb), query_name],

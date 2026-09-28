@@ -701,3 +701,43 @@ the terminal lacks macOS screen-capture permission.
 | `CLAUDE.md` | New **Unit tests** section: run `python -m unittest discover -s tests -v` after every change to `access2sql.py`, `access2sql_gui.py` or `tests/`; all must pass before reporting done; skipped ≠ passed; record the result in the dev log |
 
 First run under the new rule (after the v1.5.2 "Clear all" change): 16 tests, OK.
+
+---
+
+## Session — TEST_delete / TEST_insert added to unit tests (v1.5.2 → 1.5.3)
+
+### Problem / request
+The user added two action queries to `tests/data/test_db01.accdb` and asked for them to be
+covered by the unit tests.
+
+### Investigation
+| Query | MSysObjects.Flags | MSysQueries |
+|---|---|---|
+| `TEST_delete` | 32 (DELETE) | attr 1 flag 5; attr 5 `tblArticles`; attr 8 `idArticle = 26` |
+| `TEST_insert` | 64 (APPEND) | attr 1 flag 3, Name1 `tblArticles`; three attr 6 values (`26`, `'Macbook Pro'`, `1299.99`), no target columns |
+
+The old action path then ran `_format_query_for_display()`, which gave
+`DELETE FROM tblArticles\nWHERE idArticle = 26` (no `;`) and a VALUES list split one value
+per line. That isn't the Access layout. The user confirmed the Access SQL view text
+(expected values must come from Access, not our output):
+```
+DELETE FROM tblArticles
+WHERE idArticle = 26;
+
+INSERT INTO tblArticles
+VALUES (26, 'Macbook Pro', 1299.99);
+```
+
+### Changes made
+| File | Change |
+|---|---|
+| `access2sql.py` | `_reconstruct_action_query_sql()`: DELETE → `DELETE FROM <from clause>` + `WHERE` line + `;`; INSERT → `INSERT INTO tbl [(cols)]` + `VALUES (…);`, or `SELECT … FROM … [WHERE]` when appending from tables; expressions verbatim; uses `_build_from_clause()` / `_access_name()`. UPDATE unchanged (still formatted by `_format_query_for_display()`, now inside the function) |
+| `access2sql.py` | `get_saved_query_sql()` returns action results without reformatting |
+| `tests/data/test_db01_expected_queries.json` | + `TEST_delete`, `TEST_insert` (14 queries, sorted) |
+| `readme_testing.md` | Test count 18; list of uncovered cases updated |
+
+Tests: 18 tests, OK.
+Not covered by a test query: UPDATE layout, INSERT … SELECT, INSERT with a column list.
+
+### Version bump
+`1.5.2` → `1.5.3`

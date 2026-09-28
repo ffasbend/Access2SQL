@@ -2,6 +2,8 @@
   "TEST_as": "SELECT *\nFROM tblClients AS C, tblFactures AS F\nWHERE C.idCLient = F.fiClient;",
   "TEST_as_group_by": "SELECT fldNom, fldPrénom, COUNT(*) AS [Nombre de factures]\nFROM tblClients AS C, tblFactures AS F\nWHERE C.idCLient = F.fiClient\nGROUP BY fldNom, fldPrénom;",
   "TEST_as_group_by_having": "SELECT fldNom, fldPrénom, COUNT(*) AS [Nombre de factures]\nFROM tblClients AS C, tblFactures AS F\nWHERE C.idCLient = F.fiClient\nGROUP BY fldNom, fldPrénom\nHAVING COUNT(*) > 3;",
+  "TEST_delete": "DELETE FROM tblArticles\nWHERE idArticle = 26;",
+  "TEST_insert": "INSERT INTO tblArticles\nVALUES (26, 'Macbook Pro', 1299.99);",
   "TEST_like": "SELECT *\nFROM tblClients\nWHERE fldNom LIKE '?e*';",
   "TEST_like_and": "SELECT *\nFROM tblClients\nWHERE fldNom LIKE '?e*' \nAND fldLocalité = 'Luxembourg';",
   "TEST_like_and_same_line": "SELECT *\nFROM tblClients\nWHERE fldNom LIKE '?e*' AND fldLocalité = 'Luxembourg';",
