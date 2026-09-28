@@ -1,16 +1,21 @@
 # Testing Access2SQL
 
-The unit tests check that saved Access queries are exported **exactly** as Access shows
-them in its SQL view: same keywords (`TOP`, `AS`, `DISTINCT`, …), same line breaks, same
-spaces.
+The unit tests check that:
+
+- saved Access queries are exported **exactly** as Access shows them in its SQL view:
+  same keywords (`TOP`, `AS`, `DISTINCT`, …), same line breaks, same spaces;
+- tables are exported correctly even **without a UTF-8 locale**, as when the app is
+  started from Finder (regression test for tables with non-ASCII names like `Employé`).
 
 ## What is tested
 
 | File | Purpose |
 |---|---|
-| [tests/test_queries.py](tests/test_queries.py) | The unit tests (standard-library `unittest`) |
+| [tests/test_queries.py](tests/test_queries.py) | Saved-query tests (standard-library `unittest`) |
+| [tests/test_locale.py](tests/test_locale.py) | Locale / non-ASCII table name tests |
 | [tests/data/test_db01.accdb](tests/data/test_db01.accdb) | Test Access database with tables and saved queries |
 | [tests/data/test_db01_expected_queries.json](tests/data/test_db01_expected_queries.json) | Expected SQL text for every tested query |
+| [tests/data/Employes.accdb](tests/data/Employes.accdb) | Table `Employé` (8 columns, 19 rows) for the locale test |
 
 Only queries whose name starts with **`TEST`** are tested (`TEST_as`, `TEST_top`, …).
 The other queries in the database (`Query 1`, `Query 2`, …) are ignored.
@@ -22,6 +27,8 @@ The tests are:
 | `TestQueryList` | The set of `TEST*` queries in the database equals the set in the JSON file, so a new query can't be forgotten |
 | `TestSavedQuerySql` | One test per `TEST*` query: `get_saved_query_sql()` returns exactly the expected text |
 | `TestExportQueriesFiles` | `export_queries()` writes every query into the `.txt` and `.md` files, and never overwrites an existing file |
+| `TestMdbEnv` | `_mdb_env()` adds a UTF-8 locale for mdbtools when none (or plain `C`) is set, and keeps an existing one |
+| `TestExportWithoutLocale` | Runs `try_mdbtools()` in a child Python with **no locale** and `PYTHONCOERCECLOCALE=0` (how the Python inside the app behaves); table `Employé` must have 8 columns and 19 rows |
 
 The export tests work on a temporary copy of the database, so running the tests never
 creates files in `tests/data/`.
@@ -89,7 +96,7 @@ test_TEST_as (test_queries.TestSavedQuerySql.test_TEST_as)
 Query 'TEST_as' matches Access SQL view ... ok
 ...
 ----------------------------------------------------------------------
-Ran 19 tests in 0.12s
+Ran 23 tests in 0.22s
 
 OK
 ```

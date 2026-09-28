@@ -771,3 +771,43 @@ Tests: 19 tests, OK.
 
 ### Version bump
 `1.5.3` → `1.5.4`
+
+---
+
+## Session — Release app exported empty tables for `Employes.accdb` (v1.5.4 → 1.5.5)
+
+### Problem / request
+With the **downloaded release app**, the SQL for `Employes.accdb` had an empty
+`CREATE TABLE "Employé"` (no columns) and no INSERT lines.
+
+### Investigation
+| Check | Result |
+|---|---|
+| Current code from source (mdbtools) | 8 columns, 19 rows; loads into sqlite3 → 19 rows |
+| pyodbc backend | Not installed → not the cause |
+| Source run with `LANG` unset | Still fine, because the normal `python3` applies PEP 538 C-locale coercion and passes `LC_CTYPE=UTF-8` to child processes |
+| v1.5.4 DMG, bundled `mdb-export` with no locale | **`argument parsing failed: Invalid byte sequence in conversion input`** |
+
+mdbtools (GLib) decodes command-line arguments with the locale charset. The app started from
+Finder has no locale, and the Python inside the PyInstaller bundle doesn't coerce it, so the
+table name `Employé` (é) couldn't be passed to `mdb-schema` / `mdb-export`. Columns and rows
+came back empty, and nothing reported the error.
+
+Reproduced from source with the release app's binaries (`sys._MEIPASS` → app Frameworks),
+`env -i` and `PYTHONCOERCECLOCALE=0`: old code → 0 columns / 0 rows; fixed → 8 / 19.
+`LC_ALL=C.UTF-8`, `en_US.UTF-8` and `LC_CTYPE=UTF-8` all fix it; `LC_ALL=C` doesn't.
+
+### Changes made
+| File | Change |
+|---|---|
+| `access2sql.py` | New `_mdb_env()`: copy of the environment plus `LC_ALL` = `en_US.UTF-8` (macOS) / `C.UTF-8` (other) when LC_ALL/LC_CTYPE/LANG isn't UTF-8; passed as `env=` to all 5 mdbtools `subprocess.run` calls |
+| `access2sql.py` | `_export_sql()` logs `! WARNING: could not read the columns of table …` instead of silently writing an empty table |
+| `tests/data/Employes.accdb` | Copy of the user's database (table `Employé`, 8 columns, 19 rows) |
+| `tests/test_locale.py` | New: `TestMdbEnv` (3 tests) and `TestExportWithoutLocale` (child Python, no locale, no coercion) |
+| `readme_testing.md` | Describes the new tests and file; count 23 |
+
+Tests: 23 tests, OK. With the fix disabled, the 3 new locale tests fail as expected.
+A new release (tag `v1.5.5`) is needed for the downloadable app to include the fix.
+
+### Version bump
+`1.5.4` → `1.5.5`

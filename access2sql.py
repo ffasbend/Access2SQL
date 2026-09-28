@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.5.4"
+VERSION = "1.5.5"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -390,11 +390,27 @@ def _mdb_binary_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+def _mdb_env() -> dict[str, str]:
+    """Environment for mdbtools with a UTF-8 locale.
+
+    mdbtools (GLib) decodes its arguments with the locale's charset. An app launched
+    from Finder/Explorer — and the Python inside a PyInstaller bundle, which unlike the
+    normal interpreter doesn't coerce the C locale to UTF-8 — has no UTF-8 locale, so
+    any table name with non-ASCII characters (e.g. "Employé") fails with
+    "argument parsing failed: Invalid byte sequence in conversion input".
+    """
+    env = dict(os.environ)
+    current = env.get("LC_ALL") or env.get("LC_CTYPE") or env.get("LANG") or ""
+    if not re.search(r"utf-?8", current, re.IGNORECASE):
+        env["LC_ALL"] = "en_US.UTF-8" if IS_MAC else "C.UTF-8"
+    return env
+
+
 def _run(cmd: list[str], check=True) -> str:
     if cmd and cmd[0] in _MDB_TOOL_NAMES:
         cmd = [_mdb_binary(cmd[0]), *cmd[1:]]
     result = subprocess.run(cmd, capture_output=True, text=True,
-                            encoding="utf-8", errors="replace")
+                            encoding="utf-8", errors="replace", env=_mdb_env())
     if check and result.returncode != 0:
         raise RuntimeError(f"Command {cmd} failed:\n{result.stderr}")
     return result.stdout
@@ -425,6 +441,7 @@ def _run_mdb_sql(accdb: Path, sql: str) -> str:
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=_mdb_env(),
     )
     if result.returncode != 0:
         return ""
@@ -444,7 +461,7 @@ def _export_system_table(accdb: Path, table: str) -> list[dict[str, str]]:
     if key not in _SYSTABLE_CACHE:
         result = subprocess.run(
             [_mdb_binary("mdb-export"), "-b", "strip", str(accdb), table],
-            capture_output=True, check=False,
+            capture_output=True, check=False, env=_mdb_env(),
         )
         if result.returncode != 0:
             return []
@@ -835,6 +852,7 @@ def list_saved_queries(accdb: Path) -> list[str]:
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=_mdb_env(),
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "Failed to list saved queries")
@@ -860,6 +878,7 @@ def get_saved_query_sql(accdb: Path, query_name: str) -> str:
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=_mdb_env(),
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"Failed to extract query '{query_name}'")
@@ -1620,6 +1639,11 @@ def _export_sql(accdb: Path, use_pyodbc: bool) -> None:
         "PRAGMA foreign_keys=ON;",
         "",
     ]
+
+    for table, table_schema in schema.items():
+        if not table_schema.get("columns"):
+            print(f"    ! WARNING: could not read the columns of table {table!r} "
+                  "— CREATE TABLE and data will be empty")
 
     table_order = order_tables_by_dependencies(schema)
 
