@@ -8,5 +8,6 @@
   "TEST_top_2_all": "SELECT TOP 2 *\nFROM Client;",
   "TEST_top_4": "SELECT TOP 4 noClient, Nom, Prénom\nFROM Client;",
   "TEST_union1": "SELECT Nom, Localité\nFROM Client\nUNION SELECT Nom, Localité\n      FROM Agent\nORDER BY Localité, 1 DESC;",
-  "TEST_union2": "SELECT Nom, Localité, 'Client' AS Type\nFROM Client\nUNION SELECT Nom, Localité, 'Agent' AS Type\nFROM Agent\nORDER BY Localité;"
+  "TEST_union2": "SELECT Nom, Localité, 'Client' AS Type\nFROM Client\nUNION SELECT Nom, Localité, 'Agent' AS Type\nFROM Agent\nORDER BY Localité;",
+  "TEST_union3": "SELECT Nom, Localité, 'Client' AS Type\nFROM Client\nUNION SELECT Nom, Localité, 'Agent' AS Type\nFROM Agent\nORDER BY Localité, 1;"
 }

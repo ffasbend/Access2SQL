@@ -887,3 +887,25 @@ Tests: 37 tests, OK.
 
 ### Version bump
 `1.5.6` → `1.5.7`
+
+---
+
+## Session — TEST_union3 added to test_db02 tests (no version change)
+
+### Problem / request
+The user added a new test query to `tests/data/test_db02.accdb`.
+
+### Investigation
+`TestQueryListTestDb02` failed: `'TEST_union3'` was missing from the JSON. A raw-row comparison
+with the committed DB showed no other query changed. `TEST_union3` (Flags 128) = `TEST_union2`
+plus ORDER BY row `1` without DESC. The export
+`…UNION SELECT Nom, Localité, 'Agent' AS Type↵FROM Agent↵ORDER BY Localité, 1;` was confirmed
+by the user against the Access SQL view.
+
+### Changes made
+| File | Change |
+|---|---|
+| `tests/data/test_db02_expected_queries.json` | + `TEST_union3` (11 queries) |
+| `readme_testing.md` | Expected-output example: 38 tests |
+
+No code change was needed. Tests: 38 tests, OK.
