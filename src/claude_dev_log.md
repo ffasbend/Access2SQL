@@ -853,3 +853,37 @@ text (union1) and the alias form were confirmed by the user; union2 follows the 
 
 ### Version bump
 `1.5.5` → `1.5.6`
+
+---
+
+## Session — Tests adapted to changed test_db02 queries; UNION ORDER BY fix (v1.5.6 → 1.5.7)
+
+### Problem / request
+The user changed two queries in `tests/data/test_db02.accdb` and asked to adapt the tests.
+
+### Investigation
+The test run failed only for `TEST_having_2x_count`. Comparing every query's raw MSysQueries rows
+between the committed DB (`git show HEAD:…`) and the new one found three changed queries:
+
+| Query | Raw change | Export |
+|---|---|---|
+| `TEST_having_2x_count` | SELECT `NoAent` → `Agent.NoAgent`, GROUP BY `NoAgent` → `Agent.NoAgent` | changed (test failed) |
+| `TEST_union1` | ORDER BY row `1` got `Name1 = 'd'` | **unchanged**, because the `1` row was dropped |
+| `TEST_union2` | ORDER BY row `1` removed | unchanged |
+
+So the attr-11 row with Expression `1` is a real ORDER BY term (a column number), not a hidden
+extra row. The v1.5.6 rule that dropped a trailing `1` row was wrong. The earlier user confirmation
+("ORDER BY Localité;") was about the UNION placement, and the old query most likely read
+`ORDER BY Localité, 1`. The user confirmed the new texts:
+`TEST_union1` → `ORDER BY Localité, 1 DESC;`, `TEST_union2` → `ORDER BY Localité;`.
+
+### Changes made
+| File | Change |
+|---|---|
+| `access2sql.py` | `_reconstruct_union_query_sql()`: removed the "drop trailing `1` ORDER BY row" special case; every attr-11 row is output, with DESC |
+| `tests/data/test_db02_expected_queries.json` | Updated `TEST_having_2x_count`, `TEST_union1`, `TEST_union2` |
+
+Tests: 37 tests, OK.
+
+### Version bump
+`1.5.6` → `1.5.7`

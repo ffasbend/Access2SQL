@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.5.6"
+VERSION = "1.5.7"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -791,14 +791,10 @@ def _reconstruct_union_query_sql(accdb: Path, query_name: str) -> str | None:
             sql += "\n"
         sql += keyword + part
 
-    # ORDER BY: Access stores an extra row with Expression "1" for union queries
-    # that the SQL view doesn't show (observed in test_db02: TEST_union1/2).
-    order_rows = [r for r in rows if r["attribute"] == _QA_ORDER and r["expression"]]
-    if len(order_rows) > 1 and order_rows[-1]["expression"].strip() == "1":
-        order_rows = order_rows[:-1]
+    # ORDER BY terms may be column numbers ("ORDER BY Localité, 1 DESC").
     order_by = [
         r["expression"] + (" DESC" if r["name1"].strip().upper() == "D" else "")
-        for r in order_rows
+        for r in rows if r["attribute"] == _QA_ORDER and r["expression"]
     ]
     sql = sql.rstrip("\n")
     if order_by:
