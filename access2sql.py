@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.5.5"
+VERSION = "1.5.6"
 
 HELP_TEXT = """Notes:
 - Opens a folder picker and scans recursively for .accdb/.mdb files.
@@ -759,6 +759,53 @@ def _build_from_clause(table_rows: list[dict[str, str]], join_rows: list[dict[st
     return ", ".join(parts)
 
 
+_UNION_OBJECT_FLAGS = 128
+_QF_UNION_DISTINCT = 2      # attribute 3 bit: UNION (set) vs UNION ALL (clear)
+
+
+def _reconstruct_union_query_sql(accdb: Path, query_name: str) -> str | None:
+    """Rebuild a UNION query the way Access's SQL view shows it.
+
+    Each SELECT part is stored verbatim in an attribute-5 row (Expression); a part
+    usually keeps the line break that preceded the next UNION. Access joins the parts
+    with "UNION " / "UNION ALL " in front of every following part.
+    """
+    obj = _lookup_query_object(accdb, query_name)
+    if obj is None or obj[1] != _UNION_OBJECT_FLAGS:
+        return None
+    rows = _load_msysquery_rows(accdb, obj[0])
+    parts = [r["expression"] for r in rows if r["attribute"] == _QA_TABLE and r["expression"]]
+    if not parts:
+        return None
+
+    flag_row = next((r for r in rows if r["attribute"] == _QA_FLAG), None)
+    try:
+        flags = int(flag_row["flag"]) if flag_row else _QF_UNION_DISTINCT
+    except ValueError:
+        flags = _QF_UNION_DISTINCT
+    keyword = "UNION " if flags & _QF_UNION_DISTINCT else "UNION ALL "
+
+    sql = parts[0]
+    for part in parts[1:]:
+        if not sql[-1:].isspace():
+            sql += "\n"
+        sql += keyword + part
+
+    # ORDER BY: Access stores an extra row with Expression "1" for union queries
+    # that the SQL view doesn't show (observed in test_db02: TEST_union1/2).
+    order_rows = [r for r in rows if r["attribute"] == _QA_ORDER and r["expression"]]
+    if len(order_rows) > 1 and order_rows[-1]["expression"].strip() == "1":
+        order_rows = order_rows[:-1]
+    order_by = [
+        r["expression"] + (" DESC" if r["name1"].strip().upper() == "D" else "")
+        for r in order_rows
+    ]
+    sql = sql.rstrip("\n")
+    if order_by:
+        sql += "\nORDER BY " + ", ".join(order_by)
+    return sql + ";"
+
+
 def _reconstruct_select_query_sql(accdb: Path, query_name: str) -> str | None:
     """Rebuild a SELECT (or make-table) query exactly the way Access's SQL view shows it.
 
@@ -869,6 +916,10 @@ def get_saved_query_sql(accdb: Path, query_name: str) -> str:
     reconstructed = _reconstruct_action_query_sql(accdb, query_name)
     if reconstructed:
         return reconstructed
+
+    reconstructed_union = _reconstruct_union_query_sql(accdb, query_name)
+    if reconstructed_union:
+        return reconstructed_union
 
     result = subprocess.run(
         [_mdb_binary("mdb-queries"), str(accdb), query_name],

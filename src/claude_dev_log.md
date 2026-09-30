@@ -811,3 +811,45 @@ A new release (tag `v1.5.5`) is needed for the downloadable app to include the f
 
 ### Version bump
 `1.5.4` → `1.5.5`
+
+---
+
+## Session — test_db02 queries in unit tests; UNION queries supported (v1.5.5 → 1.5.6)
+
+### Problem / request
+Add the `TEST_` queries of the new `tests/data/test_db02.accdb` to the unit tests.
+
+### Investigation
+`test_db02` has tables Agent, Client, Contrat and 10 `TEST_` queries. Eight SELECT queries
+already came out plausibly (aliases with self-joins, verbatim `And`/`and` variations,
+`=    11`). Two needed checking with the user:
+
+| Query | Storage | Issue |
+|---|---|---|
+| `TEST_union1`, `TEST_union2` | MSysObjects.Flags **128** (UNION); each SELECT part verbatim in an attribute-5 `Expression` (first part ends with `\n`); attr 3 flag 3; attr 11 rows `Localité` **and `1`** | Not supported → `SELECT DISTINCT  FROM [],[] ORDER BY Localité` |
+| `TEST_having_2x_count`, `TEST_max` | attr 6 `Name1` stores the alias **with** quotes: `'Contrats conclus'` | Output `AS ['Contrats conclus']` — needed confirmation |
+
+The user confirmed the Access SQL view texts:
+```
+SELECT Nom, Localité
+FROM Client
+UNION SELECT Nom, Localité
+      FROM Agent
+ORDER BY Localité;
+```
+and `AS ['Contrats conclus']` (already correct). The stored ORDER BY row `1` isn't shown by Access.
+
+### Changes made
+| File | Change |
+|---|---|
+| `access2sql.py` | New `_reconstruct_union_query_sql()`: parts joined with `UNION ` (or `UNION ALL ` when attr 3 bit 2 is clear), a line break added only if a part doesn't end with whitespace; ORDER BY from attr 11 minus a trailing `1` row; `;` at the end. Called from `get_saved_query_sql()` |
+| `tests/test_queries.py` | Now data-driven: `TEST_DATABASES = ["test_db01", "test_db02"]`; the three test classes are generated per DB (`TestSavedQuerySqlTestDb02`, …); prefix `TEST_`; failure messages include the DB name. Loop variables are deleted afterwards (otherwise unittest collected `_cls` a second time → 40 instead of 37 tests) |
+| `tests/data/test_db02_expected_queries.json` | New: 10 expected texts |
+| `readme_testing.md` | Both DBs, class names with DB suffix, single-test commands, count 37, new section "Adding a new test database" |
+
+Tests: 37 tests, OK.
+Expected texts for the 8 non-UNION queries were taken from the output after review. The UNION
+text (union1) and the alias form were confirmed by the user; union2 follows the same pattern.
+
+### Version bump
+`1.5.5` → `1.5.6`

@@ -1,0 +1,12 @@
+{
+  "TEST_and_variations": "SELECT DISTINCT Ag.Nom, Ag.Prénom\nFROM Client AS Cl1, Client AS Cl2, Contrat AS Co, Agent AS Ag\nWHERE Ag.NoAgent=Co.NoAgent \n  And Cl1.NoClient=Co.NoClient \n  AND Cl1.Localité = Cl2.Localité\n    and Cl2.NoClient=    11;",
+  "TEST_distinct": "SELECT DISTINCT Nom\nFROM Agent, Contrat\nWHERE Agent.NoAgent=Contrat.NoAgent And Pays='France';",
+  "TEST_having_2x_count": "SELECT NoAent, Nom, Prénom, Count(NoContrat) AS ['Contrats conclus']\nFROM Agent, Contrat\nWHERE Agent.NoAgent = Contrat.NoAgent\nGROUP BY NoAgent, Nom, Prénom\nHAVING Count(NoContrat) >= 2\nORDER BY COUNT(NoContrat) DESC;",
+  "TEST_join_same_table": "SELECT DISTINCT Ag.Nom, Ag.Prénom\nFROM Agent AS Ag, Contrat AS Co1, Contrat AS Co2\nWHERE Ag.NoAgent = Co1.NoAgent\nAND Co1.NoAgent <> Co2.Noagent\nAND Co1.NoClient = Co2.NoClient;",
+  "TEST_max": "SELECT Max(Prime) AS ['Plus grande Prime']\nFROM Contrat AS C, Agent AS A\nWHERE C.NoAgent=A.NoAgent\nAND Pays = 'Belgique'\nAND AgentGénéral=No;",
+  "TEST_ref_query": "SELECT Localité, Type, COUNT(*)\nFROM TEST_union2\nGROUP BY Localité, Type;",
+  "TEST_top_2_all": "SELECT TOP 2 *\nFROM Client;",
+  "TEST_top_4": "SELECT TOP 4 noClient, Nom, Prénom\nFROM Client;",
+  "TEST_union1": "SELECT Nom, Localité\nFROM Client\nUNION SELECT Nom, Localité\n      FROM Agent\nORDER BY Localité;",
+  "TEST_union2": "SELECT Nom, Localité, 'Client' AS Type\nFROM Client\nUNION SELECT Nom, Localité, 'Agent' AS Type\nFROM Agent\nORDER BY Localité;"
+}
