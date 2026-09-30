@@ -909,3 +909,30 @@ by the user against the Access SQL view.
 | `readme_testing.md` | Expected-output example: 38 tests |
 
 No code change was needed. Tests: 38 tests, OK.
+
+---
+
+## Session — TEST_as_variations added to test_db02 tests (no version change)
+
+### Problem / request
+The user added another test query to `tests/data/test_db02.accdb`.
+
+### Investigation
+`TestQueryListTestDb02` reported the missing `'TEST_as_variations'`. No other query changed
+(raw-row comparison with the committed DB). The query covers three alias forms, stored in attr 6 `Name1`:
+
+| Stored alias | Export | Why |
+|---|---|---|
+| `Numéro Agent` | `AS [Numéro Agent]` | contains a space → brackets added (`_format_alias_for_access`) |
+| `'Le nom'` | `AS ['Le nom']` | quotes are part of the stored name → brackets |
+| `Vorname` | `AS Vorname` | plain word → bare |
+
+The user confirmed the alias list against the Access SQL view.
+
+### Changes made
+| File | Change |
+|---|---|
+| `tests/data/test_db02_expected_queries.json` | + `TEST_as_variations` (12 queries) |
+| `readme_testing.md` | Expected-output example: 39 tests |
+
+No code change was needed. Tests: 39 tests, OK.

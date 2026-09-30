@@ -103,7 +103,7 @@ test_TEST_as (test_queries.TestSavedQuerySqlTestDb01.test_TEST_as)
 test_db01.accdb: query 'TEST_as' matches Access SQL view ... ok
 ...
 ----------------------------------------------------------------------
-Ran 38 tests in 0.27s
+Ran 39 tests in 0.27s
 
 OK
 ```
